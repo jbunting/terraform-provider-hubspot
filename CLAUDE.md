@@ -48,6 +48,6 @@ Note: once the provider is scaffolded, `docs/` will also hold tfplugindocs **gen
 - Deal stage `probability` is a **string** ("0.2") in the API — keep it string-typed or suffer float diffs.
 - `USER_DEFINED` association `typeId`s and custom-object `objectTypeId`s (`2-XXXX`) are **portal-specific** — resolve by name at read time; cross-portal configs reference by name.
 - Search API: separate 5 req/s pool, eventually consistent — never use it for post-create read-back; GET by ID is strongly consistent.
-- Workflows (Automation v4) is **beta** with PUT-full-replace + `revisionId` optimistic lock — post-1.0, raw-JSON resource only.
+- Workflows (Automation v4) is **beta** with PUT-full-replace + `revisionId` optimistic lock — beta APIs are in scope per the roadmap's API stability policy (raw-JSON schema, resource documented as beta-backed); planned as Phase 4.
 - Tier gating: custom objects = Enterprise; association labels/multiple pipelines = Pro/Ent. Translate 403s (scope vs product-tier vs quota) into actionable errors.
 - An active competitor exists: `jackemcpherson/terraform-provider-hubspot` (framework-native, same niche) — check it before designing overlapping resources.

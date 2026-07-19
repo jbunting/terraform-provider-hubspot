@@ -2,6 +2,10 @@
 
 Phases assume the conventions in `docs/research/01-terraform-provider-best-practices.md` and the resource semantics in `docs/design/resource-model.md`.
 
+## API stability policy
+
+**Beta HubSpot APIs are in scope.** A public-beta API (e.g. Automation v4 for workflows) is enough to build a resource on, with guardrails: the resource is documented as beta-backed (a `~>` note in its registry page), its schema leans on raw-JSON passthrough where the API surface is still moving (so HubSpot-side changes don't break our schema), and breaking upstream changes are absorbed in MINOR releases while the resource is marked beta. Only the *absence* of any public API puts a feature out of scope (see below).
+
 ## Phase 0 — Foundations
 - Scaffold from `hashicorp/terraform-provider-scaffolding-framework` (framework v1.19+, Go 1.25, protocol v6). Pick a license before writing code (MPL-2.0 like HashiCorp providers, or Apache-2.0).
 - `internal/client/`: bearer auth, token-bucket limiter + 429/5xx retry with policyName awareness, typed errors (`ErrNotFound`), cursor pagination helper, structured HubSpot error-body decoding, configurable base URL + version path segments, `tflog` wire logging.
@@ -17,19 +21,37 @@ Phases assume the conventions in `docs/research/01-terraform-provider-best-pract
 ## Phase 3 — v0.5 lists + webhooks
 `hubspot_list` (JSON filter semantic-equality custom type — highest-risk item, timebox it), `hubspot_list_membership`, `hubspot_webhook_settings`, `hubspot_webhook_subscription` (+ `developer_api_key` config path).
 
-## Phase 4 — v0.7 people + escape hatch
+## Phase 4 — v0.6 workflows (beta API)
+`hubspot_workflow` — Automation v4 (public beta, allowed per the API stability policy): raw `flow_json` attribute with JSON semantic-equality custom type, GET-then-PUT `revisionId` optimistic locking, `flow_type` CONTACT_FLOW/PLATFORM_FLOW. Loudest admin pain (backup/rollback/promotion — a paid product exists just for this); documented as beta-backed. Data source `hubspot_workflow` (lookup by name) ships alongside.
+
+## Phase 5 — v0.7 people + escape hatch
 `hubspot_user` (+ `hubspot_team`/`hubspot_role` data sources), `hubspot_crm_record`, `hubspot_association`; PII/state-security documentation page.
 
-## Phase 5 — v1.0 hardening
+## Phase 6 — v1.0 hardening
 Import round-trip tests everywhere (`ImportStateVerify`), plan-modifier audit (every immutable field has RequiresReplace + destroy-impact warnings), rate-limit soak test, state-upgrade paths frozen, docs (per-resource scopes, archive-semantics table, "managing HubSpot defaults" guide, sandbox→prod promotion guide with workspaces/aliases), **dual registry publication** per `docs/research/07-releasing.md` — Terraform Registry (goreleaser + GPG, webhook auto-ingest) and OpenTofu Registry (issue-form submission of provider + non-expiring RSA signing key to `opentofu/registry`; it indexes the same GitHub release artifacts — no separate build needed). Rehearse the pipeline with a prerelease tag (`v0.1.0-rc1`) before the first real release; add `goreleaser release --snapshot` smoke + upgrade-state gate to PR CI from the first tagged release onward.
 
 ## Post-1.0 candidates
-- `hubspot_workflow` (Automation v4 — raw `flow_json` with revisionId GET-then-PUT; API is beta, loudest admin pain; see resource-model §Tier 2).
 - `hubspot_form` (Forms v3, new-editor only), `hubspot_currency`/FX rates.
-- Typed filter blocks for lists; `hubspot_property_options` (manage options on HubSpot-defined enums like lifecyclestage); webhooks v4 journal subscriptions when GA; CMS-domain data sources.
+- Typed action blocks for workflows (once Automation v4 stabilizes); typed filter blocks for lists; `hubspot_property_options` (manage options on HubSpot-defined enums like lifecyclestage); webhooks v4 journal subscriptions (beta — evaluate under the API stability policy); CMS-domain data sources.
 
-## Known-infeasible (no API — document, watch changelog)
-Conditional stage properties, pipeline rules/stage colors/pipeline access, field-level permissions, duplicate rules, rollup properties, lead scoring criteria, saved views, team/role/seat creation, private apps & scopes, private-app webhooks, email sending domains.
+## Out of scope — no public API (document, watch the HubSpot changelog)
+
+These are admin-relevant features that CANNOT be resources today because HubSpot exposes no API at all (not even beta). Each is a candidate the moment an API ships:
+
+| Feature | Why admins want it | API status |
+|---|---|---|
+| Conditional stage properties (required properties per pipeline stage) | Data-quality enforcement in the sales process | None — the most-requested gap ([idea thread](https://community.hubspot.com/t5/HubSpot-Ideas/Expose-conditional-stage-properties-via-API/idi-p/1011599)); not even readable |
+| Pipeline rules, stage colors, pipeline team access | Process governance | UI-only |
+| Field-level property permissions | Restrict who edits fields | UI-only (and not enforced on API writes) |
+| Duplicate/dedupe rules | Data quality | UI-only; only record `merge` has an API |
+| Rollup property creation | Aggregates across associated records | UI-only; API exposes them read-only |
+| Lead scoring criteria (new engine, GA Aug 2025) | Scoring as code | None; score values readable as properties only |
+| Saved views / index-page filters | Shared team views | None; lists are the API-manageable substitute |
+| Team / role (permission set) / seat creation | Full user management as code | Read-only APIs — that's why `hubspot_team`/`hubspot_role` are data sources |
+| Private apps & their scopes | Bootstrap the provider's own credential | UI/projects-CLI only — inherently out-of-band |
+| Private-app webhook subscriptions | Webhooks without a developer account | UI / `webhooks.json` in projects only (public-app webhooks v3 ARE covered, Phase 3) |
+| Email sending domains (DKIM/SPF/DMARC) | Domain config as code | None |
+| Business units, tracking/consent settings | Account structure | None / client-side JS only |
 
 ## Competitive note
 `jackemcpherson/terraform-provider-hubspot` (framework-native, properties+groups, v0.1.1 released 2026-07-19) is active in the same niche with rigorous design docs. Before each phase, check whether collaboration or differentiation (schema plane completeness, workflows, multi-portal promotion story) is the better move.
