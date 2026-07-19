@@ -228,6 +228,14 @@ documentation and use raw-JSON schemas where the API surface is still
 moving, so upstream changes don't break your state. Expect these resources
 to evolve faster than the rest of the provider.
 
+**Can I migrate from another HubSpot provider (CleverTap, jackemcpherson, …)?**
+There is no automatic state migration from third-party HubSpot providers —
+their resource schemas and IDs are incompatible with this provider's. The
+supported path is adoption via import: remove the resource from the old
+provider's management (`terraform state rm`), then `terraform import` it
+here using this provider's ID format (e.g. `contacts/customer_tier`). The
+HubSpot objects themselves are untouched by the switch.
+
 **Why is feature X missing?**
 Check the [out-of-scope table](#out-of-scope--hubspot-has-no-api-yet) first —
 most gaps exist because HubSpot has no public API for that feature. If an
