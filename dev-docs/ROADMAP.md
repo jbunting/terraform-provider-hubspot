@@ -1,6 +1,8 @@
-# Implementation Roadmap
+# Implementation Roadmap (engineering detail)
 
-Phases assume the conventions in `docs/research/01-terraform-provider-best-practices.md` and the resource semantics in `docs/design/resource-model.md`.
+> The public, user-facing roadmap is [`/ROADMAP.md`](../ROADMAP.md) — keep the two in sync when scope changes. This document carries the per-phase engineering detail.
+
+Phases assume the conventions in `research/01-terraform-provider-best-practices.md` and the resource semantics in `design/resource-model.md`.
 
 ## API stability policy
 

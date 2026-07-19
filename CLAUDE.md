@@ -11,7 +11,8 @@ Terraform provider for HubSpot **portal configuration** (CRM-schema-as-code): pr
 ## Documentation map (read before coding)
 
 - `dev-docs/design/resource-model.md` — **the design.** Tiered resource model, per-resource semantics (RequiresReplace fields, archive-vs-delete, import ID formats), provider config block, cross-cutting decisions. Start here.
-- `dev-docs/ROADMAP.md` — phased plan (Phase 0 foundations → v1.0), post-1.0 candidates, known-infeasible list, competitive note.
+- `ROADMAP.md` (repo root) — the **public** roadmap: shipped status, phases, beta-API policy, out-of-scope table. Keep it in sync when scope changes.
+- `dev-docs/ROADMAP.md` — the engineering plan behind it (Phase 0 foundations → v1.0, per-phase implementation detail, competitive note).
 - `dev-docs/research/01-terraform-provider-best-practices.md` — engineering conventions this repo follows: framework versions, scaffold layout, CRUD/state rules, testing, release/publishing, client design.
 - `dev-docs/research/02-hubspot-api-surface.md` — endpoints, scopes, rate limits, and the 10 API quirks (soft-delete, name purgatory, PUT-replace, semantic diffing, pagination).
 - `dev-docs/research/03-prior-art.md` — existing HubSpot providers (incl. CleverTap code autopsy) and lessons from Datadog/PagerDuty/Salesforce providers.

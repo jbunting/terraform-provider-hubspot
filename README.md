@@ -54,39 +54,22 @@ resource "hubspot_property" "warranty_status" {
 More runnable examples live in [`examples/`](./examples/); full argument
 reference in [`docs/`](./docs/) (rendered on the registries once published).
 
-### Roadmap
+### Roadmap & scope
 
-The provider follows a phased plan (see [`dev-docs/ROADMAP.md`](./dev-docs/ROADMAP.md)).
-Beta HubSpot APIs are in scope: a public-beta API is enough to build on —
-the resource is then documented as beta-backed and uses a raw-JSON schema
-where the API is still moving.
+The full public roadmap lives in [`ROADMAP.md`](./ROADMAP.md). In short:
 
 - **Next:** data sources (`hubspot_property`, `hubspot_owner`, `hubspot_portal`)
-- **Phase 2 — schema plane complete:** `hubspot_object_schema` (custom objects), `hubspot_pipeline` (deal/ticket/custom pipelines with inline stages), `hubspot_association_label`
-- **Phase 3:** `hubspot_list` (dynamic/static list definitions), public-app webhook settings & subscriptions
-- **Phase 4:** `hubspot_workflow` — workflows as code via the Automation v4 beta API (raw JSON graph, optimistic locking); the single loudest admin pain (backup, rollback, sandbox→prod promotion)
-- **Phase 5:** `hubspot_user` (+ team/role data sources), a generic `hubspot_crm_record` escape hatch for seed/fixture records
-- **Post-1.0:** forms, currencies/FX rates, typed workflow action blocks
+- **Phase 2:** custom object schemas, pipelines (with inline stages), association labels
+- **Phase 3:** lists, public-app webhooks
+- **Phase 4:** workflows as code (Automation v4 beta API)
+- **Phase 5:** users, `hubspot_crm_record` fixture escape hatch
+- **Phase 6:** v1.0 hardening + publication to both registries
 
-### Out of scope — HubSpot has no API (yet)
-
-Some things admins configure in the HubSpot UI **cannot** be managed by any
-provider today, because HubSpot exposes no public API for them — not even a
-beta. Each becomes a roadmap candidate the moment an API ships:
-
-| Feature | Status |
-|---|---|
-| Conditional stage properties (required properties per pipeline stage) | No API — HubSpot's [most-requested API gap](https://community.hubspot.com/t5/HubSpot-Ideas/Expose-conditional-stage-properties-via-API/idi-p/1011599) |
-| Pipeline rules, stage colors, pipeline team access | UI-only |
-| Field-level property permissions | UI-only (and not enforced on API writes) |
-| Duplicate/dedupe rules | UI-only |
-| Rollup property creation | UI-only (read-only via API) |
-| Lead scoring criteria | No API |
-| Saved views / index-page filters | No API — use `hubspot_list` (Phase 3) instead |
-| Team, role (permission set), and seat creation | Read-only APIs — exposed as data sources instead |
-| Private apps & their scopes | UI-only — this is the provider's own out-of-band credential |
-| Private-app webhook subscriptions | UI-only (public-app webhooks are covered in Phase 3) |
-| Email sending domains (DKIM/SPF/DMARC) | No API |
+Beta HubSpot APIs are in scope (documented as beta-backed, raw-JSON schemas
+while the API moves). Some admin features **cannot** be managed by any
+provider because HubSpot has no public API for them at all — see the
+[out-of-scope table](./ROADMAP.md#out-of-scope--hubspot-has-no-public-api)
+in the roadmap.
 
 ## Requirements
 
@@ -237,10 +220,10 @@ here using this provider's ID format (e.g. `contacts/customer_tier`). The
 HubSpot objects themselves are untouched by the switch.
 
 **Why is feature X missing?**
-Check the [out-of-scope table](#out-of-scope--hubspot-has-no-api-yet) first —
-most gaps exist because HubSpot has no public API for that feature. If an
-API exists and the resource just isn't built yet, it's on the
-[roadmap](#roadmap) or worth an issue.
+Check the [out-of-scope table](./ROADMAP.md#out-of-scope--hubspot-has-no-public-api)
+first — most gaps exist because HubSpot has no public API for that feature.
+If an API exists and the resource just isn't built yet, it's on the
+[roadmap](./ROADMAP.md) or worth an issue.
 
 **Terraform or OpenTofu?**
 Both, as equals. The same binary serves both tools, CI runs the acceptance
