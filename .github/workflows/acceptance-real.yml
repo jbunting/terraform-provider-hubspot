@@ -1,0 +1,97 @@
+# Nightly acceptance tests against a real HubSpot portal (TestAccReal_* tests).
+#
+# Required repository setup:
+#   - Repository secret   HUBSPOT_ACCESS_TOKEN   — private app access token for the test portal
+#   - Repository variable HUBSPOT_TEST_PORTAL_ID — portal (hub) ID of the dedicated test portal
+#
+# Deliberately NOT triggered on pull_request: secrets must never be exposed to fork PRs.
+name: Real API Tests
+
+on:
+  schedule:
+    # Nightly at 03:00 UTC.
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# All runs share a single live HubSpot portal — never allow overlapping runs.
+# cancel-in-progress is false so an in-flight run finishes (and sweeps) cleanly.
+concurrency:
+  group: real-api-tests
+  cancel-in-progress: false
+
+jobs:
+  test:
+    name: Real API Tests (${{ matrix.tool }})
+    # Guard against scheduled runs on forks, where secrets are not configured.
+    if: github.repository == 'revosai/terraform-provider-hubspot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      # The matrix legs share the same live portal — run them one at a time.
+      max-parallel: 1
+      matrix:
+        tool:
+          - terraform
+          - opentofu
+    steps:
+      # TODO: pin actions by commit SHA for supply-chain hardening.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - if: matrix.tool == 'terraform'
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - if: matrix.tool == 'opentofu'
+        uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_wrapper: false
+      - name: Resolve tofu binary path
+        if: matrix.tool == 'opentofu'
+        run: |
+          echo "TF_ACC_TERRAFORM_PATH=$(which tofu)" >> "$GITHUB_ENV"
+          echo "TF_ACC_PROVIDER_HOST=registry.opentofu.org" >> "$GITHUB_ENV"
+      - run: go mod download
+      - name: Run real API acceptance tests
+        env:
+          TF_ACC: "1"
+          HUBSPOT_ACCESS_TOKEN: ${{ secrets.HUBSPOT_ACCESS_TOKEN }}
+          HUBSPOT_TEST_PORTAL_ID: ${{ vars.HUBSPOT_TEST_PORTAL_ID }}
+        run: |
+          if [ -z "$HUBSPOT_ACCESS_TOKEN" ]; then
+            echo "::notice::HUBSPOT_ACCESS_TOKEN secret not configured, skipping real API tests"
+            exit 0
+          fi
+          go test ./internal/provider/ -run 'TestAccReal' -v -count=1 -timeout 30m
+
+  # Clean up any leaked tf_acc_test_* resources, even when tests fail.
+  sweep:
+    name: Sweep leaked test resources
+    needs: test
+    if: always() && github.repository == 'revosai/terraform-provider-hubspot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # TODO: pin actions by commit SHA for supply-chain hardening.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - run: go mod download
+      - name: Run sweepers
+        env:
+          HUBSPOT_ACCESS_TOKEN: ${{ secrets.HUBSPOT_ACCESS_TOKEN }}
+          HUBSPOT_TEST_PORTAL_ID: ${{ vars.HUBSPOT_TEST_PORTAL_ID }}
+        run: |
+          if [ -z "$HUBSPOT_ACCESS_TOKEN" ]; then
+            echo "::notice::HUBSPOT_ACCESS_TOKEN secret not configured, skipping sweep"
+            exit 0
+          fi
+          go test ./internal/provider/ -sweep=all -timeout 10m

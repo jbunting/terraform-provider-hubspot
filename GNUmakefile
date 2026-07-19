@@ -1,6 +1,6 @@
 default: build
 
-.PHONY: build install lint generate fmt test testacc sweep
+.PHONY: build install lint generate fmt test testacc testacc-real sweep
 
 build:
 	go build ./...
@@ -25,7 +25,12 @@ test:
 testacc:
 	TF_ACC=1 go test ./... -v -count=1 -timeout 120m
 
-# Sweepers clean up leaked test infrastructure.
-# Placeholder: add `go test ./internal/provider/ -v -sweep=all` once sweepers exist.
-sweep:
-	@echo "No sweepers implemented yet."
+# Run acceptance tests against a real HubSpot portal. Requires TF_ACC=1 (set
+# below), HUBSPOT_ACCESS_TOKEN (dedicated test portal private-app token) and
+# HUBSPOT_TEST_PORTAL_ID; see internal/provider/real_api_test.go for the
+# env contract and portal safety guard.
+testacc-real:
+	TF_ACC=1 go test ./internal/provider/ -run 'TestAccReal' -v -count=1 -timeout 30m
+
+sweep: ## Delete leaked tf_acc_test_* resources from the real test portal
+	go test ./internal/provider/ -v -sweep=all -timeout 10m

@@ -25,3 +25,6 @@ crash.*.log
 .DS_Store
 .idea/
 *.swp
+
+# HubSpot config file
+hubspot.config.yml
