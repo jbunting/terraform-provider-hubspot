@@ -1,0 +1,113 @@
+# Terraform Provider testing workflow.
+name: Tests
+
+# This GitHub action runs your tests for each pull request and push.
+on:
+  pull_request:
+    paths-ignore:
+      - 'README.md'
+      - 'CHANGELOG.md'
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'README.md'
+      - 'CHANGELOG.md'
+
+# Testing only needs permission to read the repository contents.
+permissions:
+  contents: read
+
+jobs:
+  # Ensure project builds and lints before running testing matrix.
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # TODO: pin actions by commit SHA for supply-chain hardening.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - run: go mod download
+      - run: go build -v ./...
+      - name: Run linters
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+
+  generate:
+    name: Docs Generation
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # TODO: pin actions by commit SHA for supply-chain hardening.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - run: make generate
+      - name: git diff
+        run: |
+          git diff --compact-summary --exit-code || \
+            (echo; echo "Unexpected difference in directories after code generation. Run 'make generate' command and commit."; exit 1)
+
+  # Run acceptance tests against Terraform CLI versions.
+  # Acceptance tests are hermetic (fake API) — no credentials required.
+  test-terraform:
+    name: Acceptance Tests (Terraform ${{ matrix.terraform }})
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        terraform:
+          - '1.13.*'
+          - '1.14.*'
+    steps:
+      # TODO: pin actions by commit SHA for supply-chain hardening.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ matrix.terraform }}
+          terraform_wrapper: false
+      - run: go mod download
+      - name: Run acceptance tests
+        env:
+          TF_ACC: "1"
+        run: go test -v -count=1 ./internal/provider/
+
+  # Run acceptance tests against OpenTofu.
+  test-opentofu:
+    name: Acceptance Tests (OpenTofu)
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # TODO: pin actions by commit SHA for supply-chain hardening.
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_wrapper: false
+      - run: go mod download
+      - name: Run acceptance tests
+        env:
+          TF_ACC: "1"
+          TF_ACC_TERRAFORM_PATH: "/usr/local/bin/tofu"
+          TF_ACC_PROVIDER_HOST: "registry.opentofu.org"
+        run: go test -v -count=1 ./internal/provider/

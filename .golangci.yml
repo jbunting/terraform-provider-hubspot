@@ -1,0 +1,24 @@
+# golangci-lint v2 configuration.
+# Linter set follows HashiCorp provider conventions
+# (terraform-provider-scaffolding-framework).
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - copyloopvar
+    - durationcheck
+    - errcheck
+    - forcetypeassert
+    - godot
+    - govet
+    - ineffassign
+    - makezero
+    - misspell
+    - nilerr
+    - predeclared
+    - staticcheck
+    - unconvert
+    - unparam
+    - unused
+    - usetesting
