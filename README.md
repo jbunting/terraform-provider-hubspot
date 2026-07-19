@@ -88,15 +88,19 @@ terraform {
 }
 
 provider "hubspot" {
-  # Authentication uses a HubSpot private app access token,
-  # read from the HUBSPOT_ACCESS_TOKEN environment variable.
+  # Authentication uses a HubSpot service key (or legacy private
+  # app token), read from the HUBSPOT_ACCESS_TOKEN environment variable.
 }
 ```
 
 ### Authentication & scopes
 
-Create a [private app](https://developers.hubspot.com/docs/guides/apps/private-apps/overview)
-in your HubSpot portal and export its token:
+Create a [service key](https://developers.hubspot.com/docs/apps/developer-platform/build-apps/authentication/account-service-keys)
+in your HubSpot portal (**Development → Keys → Service keys**; requires a
+super admin — service keys are HubSpot's successor to legacy private apps
+and support rotation with a 7-day grace period) and export it. A legacy
+[private app](https://developers.hubspot.com/docs/apps/legacy-apps/private-apps/overview)
+token works identically:
 
 ```shell
 export HUBSPOT_ACCESS_TOKEN="pat-..."
@@ -188,7 +192,15 @@ create. Explicitly `terraform import` a HubSpot-defined object if you want
 to manage it; where HubSpot forbids deletion, destroy returns a clear error
 suggesting `terraform state rm`.
 
-**Does it work with OAuth apps instead of private app tokens?**
+**Service key or private app token?**
+Either works — both are `pat-…` bearer tokens and the provider treats them
+identically. Prefer **service keys** (HubSpot's designated successor to
+legacy private apps for data-only integrations, public beta): they support
+zero-downtime rotation and per-key request logs. Note service-key scopes
+are capped at the creating user's permissions, so create it as a super
+admin.
+
+**Does it work with OAuth apps instead of tokens?**
 No. OAuth access tokens expire every 30 minutes and need an interactive
 install flow — the wrong shape for non-interactive Terraform runs. Private
 app tokens are long-lived, portal-scoped, and rotatable. (OAuth support may

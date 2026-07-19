@@ -34,7 +34,7 @@ Note: once the provider is scaffolded, `docs/` will also hold tfplugindocs **gen
 ## Non-negotiable design decisions (already made — don't relitigate)
 
 1. **terraform-plugin-framework, never SDKv2.** Go 1.25+, framework v1.19+, protocol v6, no muxing.
-2. **Auth = private-app token** (`HUBSPOT_ACCESS_TOKEN`, `pat-…`), optional `developer_api_key` for public-app webhook resources only. No OAuth in v1.
+2. **Auth = `pat-…` bearer token** (`HUBSPOT_ACCESS_TOKEN`): a HubSpot **service key** (recommended — beta successor to private apps, same token format) or a legacy private-app token; the provider treats them identically. Optional `developer_api_key` for public-app webhook resources only. No OAuth in v1. Service keys have no management API yet (UI-only) — no service-key resource.
 3. **Hand-rolled thin client in `internal/client/`** — no official Go SDK exists; community SDKs are stale/partial. Client owns: token-bucket rate limiting (~100 req/10s default) + reactive 429 backoff (policyName-aware: retry `TEN_SECONDLY_ROLLING`, abort `DAILY`), typed errors, cursor pagination, context propagation.
 4. **Config plane only; no typed record resources.** `hubspot_contact` etc. are anti-patterns (drift, PII in state, scale). The only record surface is generic `hubspot_crm_record` (upsert by `id_property`, manages only listed properties).
 5. **Destroy = archive** on most resources, with a confirming read; never fake a successful delete of non-deletable objects (error suggesting `terraform state rm`). Property/schema names are locked ~90 days after archive — handle the recreate collision explicitly.

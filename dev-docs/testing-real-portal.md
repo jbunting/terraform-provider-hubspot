@@ -16,9 +16,14 @@ account (Enterprise trials on all Hubs) or a dedicated trial instance.
 enforces this, but the credential should be scoped to a throwaway portal to
 begin with.
 
-### 2. Private app token (HubSpot UI)
+### 2. API credential (HubSpot UI)
 
-In the test portal: settings gear → **Integrations → Private Apps** (newer
+Preferred: create a **service key** in the test portal — **Development →
+Keys → Service keys** → *Create service key* (as a super admin), name it
+`terraform-provider-acceptance`, grant the scopes below, copy the key.
+Service keys rotate with a 7-day grace period — ideal for CI secrets.
+
+Legacy alternative: settings gear → **Integrations → Private Apps** (newer
 UIs: Account Management → Integrations → Private Apps) → *Create a private
 app* → name it `terraform-provider-acceptance` → **Scopes**: grant
 Read+Write for `crm.schemas.contacts` (today's tests) plus

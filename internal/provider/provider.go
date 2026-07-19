@@ -52,13 +52,15 @@ func (p *HubSpotProvider) Metadata(_ context.Context, _ provider.MetadataRequest
 func (p *HubSpotProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manage HubSpot portal configuration (CRM schema plane) as code: properties, " +
-			"property groups, and more. Authenticates with a HubSpot private app access token. " +
+			"property groups, and more. Authenticates with a HubSpot service key (recommended; public beta) " +
+			"or a legacy private app access token — both use the same `pat-...` bearer format. " +
 			"The provider never requests CRM record scopes.",
 		Attributes: map[string]schema.Attribute{
 			"access_token": schema.StringAttribute{
 				Optional:  true,
 				Sensitive: true,
-				MarkdownDescription: "HubSpot private app access token (`pat-...`). May also be set via the " +
+				MarkdownDescription: "HubSpot API credential (`pat-...`): a service key (Development → Keys → " +
+					"Service keys; recommended) or a legacy private app access token. May also be set via the " +
 					"`HUBSPOT_ACCESS_TOKEN` environment variable.",
 			},
 			"base_url": schema.StringAttribute{

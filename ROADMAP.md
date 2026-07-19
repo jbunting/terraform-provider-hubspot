@@ -22,7 +22,25 @@ beta. Only the complete absence of a public API puts a feature out of scope.
 | `hubspot_property_group` | Full lifecycle + import |
 | `hubspot_property` | All field types, ordered enumeration options, archive-aware destroy, name-purgatory handling, import |
 
-### 🔜 Next: data sources
+### 🔜 Next: service keys & data sources
+
+**Improved service key usage.** HubSpot Service Keys (public beta since
+Feb 2026) are the designated successor to legacy private apps for
+data-only integrations — same `pat-…` bearer format, so the provider
+already accepts them transparently via `access_token`/`HUBSPOT_ACCESS_TOKEN`.
+Planned improvements:
+
+1. Documentation-first: recommend service keys (Development → Keys →
+   Service keys) over legacy private apps in the auth guide, README, and
+   provider description; document the caveats (beta, scopes capped at the
+   creating user's permissions, no webhooks — app credentials remain
+   required for webhook resources).
+2. Migrate CI test credentials to a service key to gain 7-day-grace
+   rotation and per-key request logs.
+3. When HubSpot ships a service-key management API (creation is UI-only
+   today): evaluate `hubspot_service_key` resource/data source and
+   ephemeral-resource support (short-lived credential handling).
+4. Re-evaluate defaults at service-key GA.
 
 `data.hubspot_property`, `data.hubspot_properties`, `data.hubspot_owner`,
 `data.hubspot_portal` — read-only glue that lets configurations reference

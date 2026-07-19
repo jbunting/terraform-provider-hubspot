@@ -11,8 +11,10 @@ code: CRM properties, property groups, pipelines, and custom object schemas.
 It does not manage CRM records (contacts, companies, deals) — those belong to
 your day-to-day CRM workflows, not your infrastructure definition.
 
-Authentication uses a HubSpot [private app](https://developers.hubspot.com/docs/guides/apps/private-apps/overview)
-access token. Grant the private app only the configuration scopes it needs
+Authentication uses a HubSpot [service key](https://developers.hubspot.com/docs/apps/developer-platform/build-apps/authentication/account-service-keys)
+(recommended) or a legacy [private app](https://developers.hubspot.com/docs/apps/legacy-apps/private-apps/overview)
+access token — both use the same `pat-...` bearer format. Grant the
+credential only the configuration scopes it needs
 (for example `crm.schemas.*`) — the provider never requests CRM record scopes,
 keeping your token least-privilege.
 
@@ -35,7 +37,8 @@ provider "hubspot" {
 
 ## Authentication
 
-Create a private app in your HubSpot portal settings and copy its access
+Create a service key (Development → Keys → Service keys, as a super admin)
+or a legacy private app in your HubSpot portal settings and copy its access
 token. The provider reads the token from the `HUBSPOT_ACCESS_TOKEN`
 environment variable:
 
@@ -52,5 +55,5 @@ out of your configuration files and state.
 
 ### Optional
 
-- `access_token` (String, Sensitive) HubSpot private app access token (`pat-...`). May also be set via the `HUBSPOT_ACCESS_TOKEN` environment variable.
+- `access_token` (String, Sensitive) HubSpot API credential (`pat-...`): a service key (Development → Keys → Service keys; recommended) or a legacy private app access token. May also be set via the `HUBSPOT_ACCESS_TOKEN` environment variable.
 - `base_url` (String) HubSpot API base URL. Defaults to `https://api.hubapi.com`. May also be set via the `HUBSPOT_BASE_URL` environment variable. Override only for testing.
