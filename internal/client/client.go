@@ -252,7 +252,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 // finished (successfully or with a non-retryable error), and done == false
 // with the error to retry on.
 func (c *Client) handleResponse(ctx context.Context, resp *http.Response, method string, out any) (done bool, err error) {
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	logDebug(ctx, "hubspot API response", map[string]any{
 		"status": resp.StatusCode,

@@ -87,11 +87,6 @@ func (f *fakeHubSpot) deleteGroup(objectType, name string) {
 	delete(f.groups[objectType], name)
 }
 
-// purgeProperty removes an archived property entirely, ending name purgatory.
-func (f *fakeHubSpot) purgeProperty(objectType, name string) {
-	f.deleteProperty(objectType, name)
-}
-
 func (f *fakeHubSpot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 		writeHubSpotError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", "missing bearer token")

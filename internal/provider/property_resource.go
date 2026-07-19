@@ -282,7 +282,7 @@ func (r *propertyResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	resp.Diagnostics.Append(flattenProperty(ctx, out, &plan)...)
+	resp.Diagnostics.Append(flattenProperty(out, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -310,7 +310,7 @@ func (r *propertyResource) Read(ctx context.Context, req resource.ReadRequest, r
 		return
 	}
 
-	resp.Diagnostics.Append(flattenProperty(ctx, out, &state)...)
+	resp.Diagnostics.Append(flattenProperty(out, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -350,7 +350,7 @@ func (r *propertyResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 
-	resp.Diagnostics.Append(flattenProperty(ctx, out, &plan)...)
+	resp.Diagnostics.Append(flattenProperty(out, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -458,7 +458,7 @@ func expandProperty(ctx context.Context, m propertyResourceModel) (propertyAPI, 
 // must already carry object_type (and, for ambiguity resolution, the prior
 // description/options null-ness). Options are sorted by the server-assigned
 // displayOrder and stored without it: list order is the order.
-func flattenProperty(ctx context.Context, api propertyAPI, m *propertyResourceModel) diag.Diagnostics {
+func flattenProperty(api propertyAPI, m *propertyResourceModel) diag.Diagnostics {
 	var diags diag.Diagnostics
 
 	m.Name = types.StringValue(api.Name)

@@ -38,11 +38,14 @@ func TestProviderSchemas(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	p := provider.New("test")()
-
-	for _, newResource := range p.(interface {
+	p, ok := provider.New("test")().(interface {
 		Resources(context.Context) []func() fwresource.Resource
-	}).Resources(ctx) {
+	})
+	if !ok {
+		t.Fatal("provider does not expose Resources")
+	}
+
+	for _, newResource := range p.Resources(ctx) {
 		r := newResource()
 
 		metaResp := &fwresource.MetadataResponse{}

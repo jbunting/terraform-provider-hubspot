@@ -34,7 +34,8 @@ jobs:
       - run: go mod download
       - run: go build -v ./...
       - name: Run linters
-        uses: golangci/golangci-lint-action@v6
+        # v8+ installs golangci-lint v2 (required by our v2-format .golangci.yml).
+        uses: golangci/golangci-lint-action@v8
         with:
           version: latest
 
@@ -105,9 +106,10 @@ jobs:
         with:
           tofu_wrapper: false
       - run: go mod download
+      - name: Resolve tofu binary path
+        run: echo "TF_ACC_TERRAFORM_PATH=$(which tofu)" >> "$GITHUB_ENV"
       - name: Run acceptance tests
         env:
           TF_ACC: "1"
-          TF_ACC_TERRAFORM_PATH: "/usr/local/bin/tofu"
           TF_ACC_PROVIDER_HOST: "registry.opentofu.org"
         run: go test -v -count=1 ./internal/provider/

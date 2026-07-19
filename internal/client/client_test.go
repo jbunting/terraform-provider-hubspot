@@ -33,7 +33,7 @@ func TestClient_SendsAuthAndUserAgent(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
 		gotUA = r.Header.Get("User-Agent")
-		fmt.Fprint(w, `{"ok":true}`)
+		_, _ = fmt.Fprint(w, `{"ok":true}`)
 	}))
 
 	var out map[string]any
@@ -52,7 +52,7 @@ func TestClient_NotFoundIsTyped(t *testing.T) {
 	t.Parallel()
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
-		fmt.Fprint(w, `{"status":"error","message":"Object not found","category":"OBJECT_NOT_FOUND","correlationId":"abc-123"}`)
+		_, _ = fmt.Fprint(w, `{"status":"error","message":"Object not found","category":"OBJECT_NOT_FOUND","correlationId":"abc-123"}`)
 	}))
 
 	err := c.Get(context.Background(), "/crm/v3/properties/contacts/nope", nil, nil)
@@ -68,7 +68,7 @@ func TestClient_DecodesHubSpotErrorBody(t *testing.T) {
 	t.Parallel()
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
-		fmt.Fprint(w, `{"status":"error","message":"Invalid input JSON","category":"VALIDATION_ERROR","correlationId":"corr-42"}`)
+		_, _ = fmt.Fprint(w, `{"status":"error","message":"Invalid input JSON","category":"VALIDATION_ERROR","correlationId":"corr-42"}`)
 	}))
 
 	err := c.Post(context.Background(), "/crm/v3/properties/contacts", map[string]any{"bad": true}, nil)
@@ -91,10 +91,10 @@ func TestClient_RetriesSecondlyRateLimit(t *testing.T) {
 		if atomic.AddInt32(&calls, 1) == 1 {
 			w.Header().Set("Retry-After", "0")
 			w.WriteHeader(http.StatusTooManyRequests)
-			fmt.Fprint(w, `{"status":"error","message":"Rate limit exceeded","category":"RATE_LIMITS","policyName":"TEN_SECONDLY_ROLLING"}`)
+			_, _ = fmt.Fprint(w, `{"status":"error","message":"Rate limit exceeded","category":"RATE_LIMITS","policyName":"TEN_SECONDLY_ROLLING"}`)
 			return
 		}
-		fmt.Fprint(w, `{"ok":true}`)
+		_, _ = fmt.Fprint(w, `{"ok":true}`)
 	}))
 
 	var out map[string]any
@@ -112,7 +112,7 @@ func TestClient_DailyLimitDoesNotRetry(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
 		w.WriteHeader(http.StatusTooManyRequests)
-		fmt.Fprint(w, `{"status":"error","message":"Daily limit reached","category":"RATE_LIMITS","policyName":"DAILY"}`)
+		_, _ = fmt.Fprint(w, `{"status":"error","message":"Daily limit reached","category":"RATE_LIMITS","policyName":"DAILY"}`)
 	}))
 
 	err := c.Get(context.Background(), "/daily", nil, nil)
@@ -136,7 +136,7 @@ func TestClient_RetriesServerErrorOnIdempotentVerbs(t *testing.T) {
 			w.WriteHeader(http.StatusBadGateway)
 			return
 		}
-		fmt.Fprint(w, `{"ok":true}`)
+		_, _ = fmt.Fprint(w, `{"ok":true}`)
 	}))
 
 	if err := c.Get(context.Background(), "/flaky", nil, nil); err != nil {
@@ -169,9 +169,9 @@ func TestClient_PaginationFollowsCursor(t *testing.T) {
 	c := newTestClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Query().Get("after") {
 		case "":
-			fmt.Fprint(w, `{"results":[{"name":"a"},{"name":"b"}],"paging":{"next":{"after":"cursor-1"}}}`)
+			_, _ = fmt.Fprint(w, `{"results":[{"name":"a"},{"name":"b"}],"paging":{"next":{"after":"cursor-1"}}}`)
 		case "cursor-1":
-			fmt.Fprint(w, `{"results":[{"name":"c"}]}`)
+			_, _ = fmt.Fprint(w, `{"results":[{"name":"c"}]}`)
 		default:
 			t.Errorf("unexpected cursor %q", r.URL.Query().Get("after"))
 			w.WriteHeader(http.StatusBadRequest)

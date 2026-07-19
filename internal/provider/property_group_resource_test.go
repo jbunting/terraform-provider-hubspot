@@ -27,12 +27,12 @@ resource "hubspot_property_group" "test" {
 `, name, label)
 }
 
-// checkPropertyGroupExists asserts the group really exists in the fake
-// HubSpot by querying it over HTTP, independent of Terraform state.
-func checkPropertyGroupExists(serverURL, objectType, name string) resource.TestCheckFunc {
+// checkPropertyGroupExists asserts a contacts group really exists in the
+// fake HubSpot by querying it over HTTP, independent of Terraform state.
+func checkPropertyGroupExists(serverURL, name string) resource.TestCheckFunc {
 	return func(_ *terraform.State) error {
 		req, err := http.NewRequest(http.MethodGet,
-			fmt.Sprintf("%s/crm/v3/properties/%s/groups/%s", serverURL, objectType, name), nil)
+			fmt.Sprintf("%s/crm/v3/properties/contacts/groups/%s", serverURL, name), nil)
 		if err != nil {
 			return err
 		}
@@ -41,10 +41,10 @@ func checkPropertyGroupExists(serverURL, objectType, name string) resource.TestC
 		if err != nil {
 			return err
 		}
-		defer httpResp.Body.Close()
+		defer func() { _ = httpResp.Body.Close() }()
 		if httpResp.StatusCode != http.StatusOK {
-			return fmt.Errorf("property group %s/%s not found in fake HubSpot (status %d)",
-				objectType, name, httpResp.StatusCode)
+			return fmt.Errorf("property group contacts/%s not found in fake HubSpot (status %d)",
+				name, httpResp.StatusCode)
 		}
 		return nil
 	}
@@ -59,7 +59,7 @@ func TestAccPropertyGroup_basic(t *testing.T) {
 			// Create and verify all attributes land in state.
 			{
 				Config: propertyGroupConfig(srv.URL, "my_group", "My Group"),
-				Check:  checkPropertyGroupExists(srv.URL, "contacts", "my_group"),
+				Check:  checkPropertyGroupExists(srv.URL, "my_group"),
 				ConfigStateChecks: []statecheck.StateCheck{
 					statecheck.ExpectKnownValue("hubspot_property_group.test",
 						tfjsonpath.New("name"), knownvalue.StringExact("my_group")),
@@ -113,7 +113,7 @@ func TestAccPropertyGroup_disappears(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config: propertyGroupConfig(srv.URL, "vanishing_group", "Vanishing Group"),
-				Check:  checkPropertyGroupExists(srv.URL, "contacts", "vanishing_group"),
+				Check:  checkPropertyGroupExists(srv.URL, "vanishing_group"),
 			},
 			// Delete the group out-of-band; a refresh must remove it from
 			// state and plan a recreate instead of erroring.
@@ -136,7 +136,7 @@ func TestAccPropertyGroup_replaceOnRename(t *testing.T) {
 		Steps: []resource.TestStep{
 			{
 				Config: propertyGroupConfig(srv.URL, "group_before", "Renamable Group"),
-				Check:  checkPropertyGroupExists(srv.URL, "contacts", "group_before"),
+				Check:  checkPropertyGroupExists(srv.URL, "group_before"),
 			},
 			// Changing the immutable name must plan a replace.
 			{
@@ -147,7 +147,7 @@ func TestAccPropertyGroup_replaceOnRename(t *testing.T) {
 							plancheck.ResourceActionReplace),
 					},
 				},
-				Check: checkPropertyGroupExists(srv.URL, "contacts", "group_after"),
+				Check: checkPropertyGroupExists(srv.URL, "group_after"),
 				ConfigStateChecks: []statecheck.StateCheck{
 					statecheck.ExpectKnownValue("hubspot_property_group.test",
 						tfjsonpath.New("id"), knownvalue.StringExact("contacts/group_after")),
