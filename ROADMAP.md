@@ -54,12 +54,12 @@ HubSpot-defined and unmanaged objects.
 
 ### Phase 2 — schema plane complete (v0.3)
 
-| Resource | Backing API |
-|---|---|
-| `hubspot_object_schema` (custom objects) | Schemas v3 (Enterprise) |
-| `hubspot_pipeline` (deals/tickets/custom, stages inline) | Pipelines v3 |
-| `hubspot_association_label` | Associations v4 |
-| Data sources: pipeline, object schema, association labels | — |
+| Resource | Backing API | Status |
+|---|---|---|
+| `hubspot_pipeline` (deals/tickets/custom, stages inline) | Pipelines v3 | ✅ shipped |
+| `hubspot_object_schema` (custom objects) | Schemas v3 (Enterprise) | planned |
+| `hubspot_association_label` | Associations v4 | planned |
+| Data sources: pipeline, object schema, association labels | — | planned |
 
 ### Phase 3 — lists + webhooks (v0.5)
 

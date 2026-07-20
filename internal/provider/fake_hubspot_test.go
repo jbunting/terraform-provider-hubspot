@@ -17,6 +17,7 @@ package provider_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -65,12 +66,49 @@ type fakeOwner struct {
 	Archived  bool   `json:"archived"`
 }
 
+// fakeStage is one stage of a pipeline as stored/returned by the fake.
+type fakeStage struct {
+	ID           string            `json:"id"`
+	Label        string            `json:"label"`
+	DisplayOrder int64             `json:"displayOrder"`
+	Metadata     map[string]string `json:"metadata"`
+}
+
+// fakePipeline is a pipeline as stored/returned by the fake.
+type fakePipeline struct {
+	ID           string      `json:"id"`
+	Label        string      `json:"label"`
+	DisplayOrder int64       `json:"displayOrder"`
+	Stages       []fakeStage `json:"stages"`
+	Default      bool        `json:"-"` // non-deletable default pipeline
+}
+
+// fakeStageInput is the wire shape the fake decodes from create/update
+// requests: it honors a client-pinned stageId (or id) when present.
+type fakeStageInput struct {
+	ID           string            `json:"id"`
+	StageID      string            `json:"stageId"`
+	Label        string            `json:"label"`
+	DisplayOrder int64             `json:"displayOrder"`
+	Metadata     map[string]string `json:"metadata"`
+}
+
+// fakePipelineInput is the wire shape the fake decodes from create/update.
+type fakePipelineInput struct {
+	Label        string           `json:"label"`
+	DisplayOrder int64            `json:"displayOrder"`
+	Stages       []fakeStageInput `json:"stages"`
+}
+
 type fakeHubSpot struct {
-	mu         sync.Mutex
-	groups     map[string]map[string]*fakeGroup    // objectType -> name -> group
-	properties map[string]map[string]*fakeProperty // objectType -> name -> property
-	owners     []*fakeOwner
-	portalID   int64
+	mu              sync.Mutex
+	groups          map[string]map[string]*fakeGroup    // objectType -> name -> group
+	properties      map[string]map[string]*fakeProperty // objectType -> name -> property
+	pipelines       map[string]map[string]*fakePipeline // objectType -> pipelineId -> pipeline
+	owners          []*fakeOwner
+	portalID        int64
+	pipelineCounter int
+	stageCounter    int
 }
 
 func newFakeHubSpot(t *testing.T) (*fakeHubSpot, *httptest.Server) {
@@ -78,6 +116,7 @@ func newFakeHubSpot(t *testing.T) (*fakeHubSpot, *httptest.Server) {
 	f := &fakeHubSpot{
 		groups:     map[string]map[string]*fakeGroup{},
 		properties: map[string]map[string]*fakeProperty{},
+		pipelines:  map[string]map[string]*fakePipeline{},
 		portalID:   123456,
 	}
 	srv := httptest.NewServer(f)
@@ -107,6 +146,13 @@ func (f *fakeHubSpot) deleteGroup(objectType, name string) {
 	delete(f.groups[objectType], name)
 }
 
+// deletePipeline simulates out-of-band deletion (for _disappears tests).
+func (f *fakeHubSpot) deletePipeline(objectType, id string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.pipelines[objectType], id)
+}
+
 func (f *fakeHubSpot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 		writeHubSpotError(w, http.StatusUnauthorized, "AUTHENTICATION_FAILED", "missing bearer token")
@@ -126,6 +172,11 @@ func (f *fakeHubSpot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// crm/v3/owners[/{ownerId}] — read-only (data source hubspot_owner).
 	if len(parts) >= 3 && parts[0] == "crm" && parts[1] == "v3" && parts[2] == "owners" {
 		f.ownersRoute(w, r, parts[3:])
+		return
+	}
+	// crm/v3/pipelines/{objectType}[/{pipelineId}] — resource hubspot_pipeline.
+	if len(parts) >= 3 && parts[0] == "crm" && parts[1] == "v3" && parts[2] == "pipelines" {
+		f.pipelinesRoute(w, r, parts[3:])
 		return
 	}
 
@@ -338,6 +389,118 @@ func (f *fakeHubSpot) ownersRoute(w http.ResponseWriter, r *http.Request, rest [
 		results = append(results, o)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+}
+
+// pipelinesRoute dispatches /crm/v3/pipelines/{objectType}[/{pipelineId}].
+func (f *fakeHubSpot) pipelinesRoute(w http.ResponseWriter, r *http.Request, rest []string) {
+	if len(rest) == 0 {
+		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "missing object type")
+		return
+	}
+	objectType := rest[0]
+	switch {
+	case len(rest) == 1 && r.Method == http.MethodPost:
+		f.createPipeline(w, r, objectType)
+	case len(rest) == 2:
+		f.pipelineByID(w, r, objectType, rest[1])
+	default:
+		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "unhandled route "+r.Method+" "+r.URL.Path)
+	}
+}
+
+// assignStages converts input stages into stored stages, honoring a
+// client-pinned stageId/id and otherwise minting a deterministic "stg_N".
+func (f *fakeHubSpot) assignStages(in []fakeStageInput) []fakeStage {
+	stages := make([]fakeStage, 0, len(in))
+	for _, s := range in {
+		id := s.StageID
+		if id == "" {
+			id = s.ID
+		}
+		if id == "" {
+			f.stageCounter++
+			id = fmt.Sprintf("stg_%d", f.stageCounter)
+		}
+		stages = append(stages, fakeStage{
+			ID:           id,
+			Label:        s.Label,
+			DisplayOrder: s.DisplayOrder,
+			Metadata:     s.Metadata,
+		})
+	}
+	return stages
+}
+
+func (f *fakeHubSpot) createPipeline(w http.ResponseWriter, r *http.Request, objectType string) {
+	var in fakePipelineInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid JSON: "+err.Error())
+		return
+	}
+	if in.Label == "" {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "label is required")
+		return
+	}
+	if len(in.Stages) == 0 {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "at least one stage is required")
+		return
+	}
+	if f.pipelines[objectType] == nil {
+		f.pipelines[objectType] = map[string]*fakePipeline{}
+	}
+	f.pipelineCounter++
+	p := &fakePipeline{
+		ID:           fmt.Sprintf("pl_%d", f.pipelineCounter),
+		Label:        in.Label,
+		DisplayOrder: in.DisplayOrder,
+		Stages:       f.assignStages(in.Stages),
+	}
+	f.pipelines[objectType][p.ID] = p
+	writeJSON(w, http.StatusCreated, p)
+}
+
+func (f *fakeHubSpot) pipelineByID(w http.ResponseWriter, r *http.Request, objectType, id string) {
+	p := f.pipelines[objectType][id]
+	switch r.Method {
+	case http.MethodGet:
+		if p == nil {
+			writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "pipeline not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, p)
+	case http.MethodPut:
+		if p == nil {
+			writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "pipeline not found")
+			return
+		}
+		var in fakePipelineInput
+		if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+			writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid JSON: "+err.Error())
+			return
+		}
+		if in.Label == "" || len(in.Stages) == 0 {
+			writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "label and at least one stage are required")
+			return
+		}
+		p.Label = in.Label
+		p.DisplayOrder = in.DisplayOrder
+		p.Stages = f.assignStages(in.Stages)
+		writeJSON(w, http.StatusOK, p)
+	case http.MethodDelete:
+		if p == nil {
+			writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "pipeline not found")
+			return
+		}
+		if p.Default {
+			writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR",
+				"the default pipeline cannot be deleted")
+			return
+		}
+		delete(f.pipelines[objectType], id)
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeHubSpotError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", r.Method)
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

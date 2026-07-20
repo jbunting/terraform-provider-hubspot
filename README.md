@@ -20,6 +20,7 @@ trail.
 |---|---|---|---|
 | [`hubspot_property_group`](./docs/resources/property_group.md) | CRM property groups — the named sections that organize properties in the HubSpot UI | Deletes the group | `{object_type}/{name}` |
 | [`hubspot_property`](./docs/resources/property.md) | Custom CRM property definitions on any object type, including enumeration options (list order = display order) and all field types | **Archives** the property — HubSpot reserves the name for ~90 days ("name purgatory"); the provider reports an actionable error if you recreate the name too soon | `{object_type}/{name}` |
+| [`hubspot_pipeline`](./docs/resources/pipeline.md) | Deal, ticket, and custom-object pipelines with inline stages (matched by `stage_id`, so reorders/renames are in-place updates, not destroy-create) | Deletes the pipeline, guarded against orphaning records; the default pipeline is adopt-via-import only | `{object_type}/{pipeline_id}` |
 
 Both resources support the full lifecycle: create, in-place update, replace
 on immutable-field changes (planned at plan time via `RequiresReplace`, with
