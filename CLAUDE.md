@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Terraform provider for HubSpot **portal configuration** (CRM-schema-as-code): properties, property groups, custom object schemas, pipelines, association labels, lists, webhooks, users — deliberately *not* CRM records (contacts/deals), except one generic `hubspot_crm_record` escape hatch for fixtures/seed data. Target: Go + `terraform-plugin-framework` (protocol v6), private-app token auth.
 
-**Current state: Phase 1 shipped; Phase 2 underway.** Foundations exist: `internal/client` (rate-limited, retrying, typed-error HTTP client — fully tested), provider shell (`internal/provider/provider.go`), and a stateful fake HubSpot server for hermetic acceptance tests (`internal/provider/fake_hubspot_test.go`). Resources: `hubspot_property_group`, `hubspot_property`, `hubspot_pipeline`. Data sources: `hubspot_property`, `hubspot_owner`, `hubspot_portal`. The design and research corpus below remains the source of truth; read the relevant doc before implementing anything.
+**Current state: Phase 1 shipped; Phase 2 underway.** Foundations exist: `internal/client` (rate-limited, retrying, typed-error HTTP client — fully tested), provider shell (`internal/provider/provider.go`), and a stateful fake HubSpot server for hermetic acceptance tests (`internal/provider/fake_hubspot_test.go`). Resources: `hubspot_property_group`, `hubspot_property`, `hubspot_pipeline`, `hubspot_object_schema`. Data sources: `hubspot_property`, `hubspot_properties`, `hubspot_owner`, `hubspot_portal`. The design and research corpus below remains the source of truth; read the relevant doc before implementing anything.
 
 ## Documentation map (read before coding)
 

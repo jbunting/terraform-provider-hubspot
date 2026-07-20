@@ -57,7 +57,7 @@ schema, association labels).
 | Resource | Backing API | Status |
 |---|---|---|
 | `hubspot_pipeline` (deals/tickets/custom, stages inline) | Pipelines v3 | ✅ shipped |
-| `hubspot_object_schema` (custom objects) | Schemas v3 (Enterprise) | planned |
+| `hubspot_object_schema` (custom objects) | Schemas v3 (Enterprise) | ✅ shipped |
 | `hubspot_association_label` | Associations v4 | planned |
 | Data sources: pipeline, object schema, association labels | — | planned |
 

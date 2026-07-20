@@ -101,15 +101,60 @@ type fakePipelineInput struct {
 	Stages       []fakeStageInput `json:"stages"`
 }
 
+// fakeObjectSchema is a custom object schema as stored/returned by the fake.
+type fakeObjectSchema struct {
+	ID                         string               `json:"id"`
+	ObjectTypeID               string               `json:"objectTypeId"`
+	FullyQualifiedName         string               `json:"fullyQualifiedName"`
+	Name                       string               `json:"name"`
+	Labels                     fakeSchemaLabels     `json:"labels"`
+	PrimaryDisplayProperty     string               `json:"primaryDisplayProperty"`
+	SecondaryDisplayProperties []string             `json:"secondaryDisplayProperties"`
+	RequiredProperties         []string             `json:"requiredProperties"`
+	SearchableProperties       []string             `json:"searchableProperties"`
+	Description                string               `json:"description,omitempty"`
+	Properties                 []fakeSchemaProperty `json:"properties"`
+	Archived                   bool                 `json:"archived"`
+}
+
+type fakeSchemaLabels struct {
+	Singular string `json:"singular"`
+	Plural   string `json:"plural"`
+}
+
+// fakeSchemaProperty is a bootstrap property carried on a schema; the fake
+// stores what the client sent and echoes it back on the created schema.
+type fakeSchemaProperty struct {
+	Name      string `json:"name"`
+	Label     string `json:"label"`
+	Type      string `json:"type"`
+	FieldType string `json:"fieldType"`
+}
+
+// fakeSchemaInput is the create body the fake decodes for POST /crm/v3/schemas.
+type fakeSchemaInput struct {
+	Name                       string               `json:"name"`
+	Labels                     fakeSchemaLabels     `json:"labels"`
+	PrimaryDisplayProperty     string               `json:"primaryDisplayProperty"`
+	SecondaryDisplayProperties []string             `json:"secondaryDisplayProperties"`
+	RequiredProperties         []string             `json:"requiredProperties"`
+	SearchableProperties       []string             `json:"searchableProperties"`
+	Description                string               `json:"description"`
+	Properties                 []fakeSchemaProperty `json:"properties"`
+	AssociatedObjects          []string             `json:"associatedObjects"`
+}
+
 type fakeHubSpot struct {
 	mu              sync.Mutex
 	groups          map[string]map[string]*fakeGroup    // objectType -> name -> group
 	properties      map[string]map[string]*fakeProperty // objectType -> name -> property
 	pipelines       map[string]map[string]*fakePipeline // objectType -> pipelineId -> pipeline
+	schemas         map[string]*fakeObjectSchema        // objectTypeId -> schema
 	owners          []*fakeOwner
 	portalID        int64
 	pipelineCounter int
 	stageCounter    int
+	schemaCounter   int
 	lastPipelinePut string // raw query string of the most recent pipeline PUT
 }
 
@@ -119,6 +164,7 @@ func newFakeHubSpot(t *testing.T) (*fakeHubSpot, *httptest.Server) {
 		groups:     map[string]map[string]*fakeGroup{},
 		properties: map[string]map[string]*fakeProperty{},
 		pipelines:  map[string]map[string]*fakePipeline{},
+		schemas:    map[string]*fakeObjectSchema{},
 		portalID:   123456,
 	}
 	srv := httptest.NewServer(f)
@@ -204,6 +250,11 @@ func (f *fakeHubSpot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// crm/v3/pipelines/{objectType}[/{pipelineId}] — resource hubspot_pipeline.
 	if len(parts) >= 3 && parts[0] == "crm" && parts[1] == "v3" && parts[2] == "pipelines" {
 		f.pipelinesRoute(w, r, parts[3:])
+		return
+	}
+	// crm/v3/schemas[/{objectType}] — resource hubspot_object_schema.
+	if len(parts) >= 3 && parts[0] == "crm" && parts[1] == "v3" && parts[2] == "schemas" {
+		f.schemasRoute(w, r, parts[3:])
 		return
 	}
 
@@ -381,6 +432,156 @@ func (f *fakeHubSpot) listProperties(w http.ResponseWriter, r *http.Request, obj
 	// Deterministic order by name so tests don't flake on map iteration order.
 	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
 	writeJSON(w, http.StatusOK, map[string]any{"results": results})
+}
+
+// schemasRoute dispatches /crm/v3/schemas[/{objectType}].
+func (f *fakeHubSpot) schemasRoute(w http.ResponseWriter, r *http.Request, rest []string) {
+	switch {
+	case len(rest) == 0 && r.Method == http.MethodPost:
+		f.createSchema(w, r)
+	case len(rest) == 1:
+		f.schemaByType(w, r, rest[0])
+	default:
+		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "unhandled route "+r.Method+" "+r.URL.Path)
+	}
+}
+
+// lookupSchema resolves an object-type reference (objectTypeId,
+// fullyQualifiedName, or bare name) to a stored schema — like real HubSpot,
+// which accepts any of the three in the path.
+func (f *fakeHubSpot) lookupSchema(ref string) *fakeObjectSchema {
+	if s, ok := f.schemas[ref]; ok {
+		return s
+	}
+	for _, s := range f.schemas {
+		if s.FullyQualifiedName == ref || s.Name == ref {
+			return s
+		}
+	}
+	return nil
+}
+
+func (f *fakeHubSpot) createSchema(w http.ResponseWriter, r *http.Request) {
+	var in fakeSchemaInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid JSON: "+err.Error())
+		return
+	}
+	if in.Name == "" || in.Labels.Singular == "" || in.Labels.Plural == "" {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "name and labels.singular/plural are required")
+		return
+	}
+	if len(in.Properties) == 0 {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "at least one property is required")
+		return
+	}
+	if in.PrimaryDisplayProperty != "" {
+		found := false
+		for _, p := range in.Properties {
+			if p.Name == in.PrimaryDisplayProperty {
+				found = true
+				break
+			}
+		}
+		if !found {
+			writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR",
+				"primaryDisplayProperty must be one of the supplied properties")
+			return
+		}
+	}
+	// Reject a duplicate name (matches HubSpot's 409 on re-create).
+	if f.lookupSchema(in.Name) != nil {
+		writeHubSpotError(w, http.StatusConflict, "CONFLICT", "object schema "+in.Name+" already exists")
+		return
+	}
+
+	f.schemaCounter++
+	objectTypeID := fmt.Sprintf("2-%d", f.schemaCounter)
+	s := &fakeObjectSchema{
+		ID:                         fmt.Sprintf("%d", f.schemaCounter),
+		ObjectTypeID:               objectTypeID,
+		FullyQualifiedName:         fmt.Sprintf("p%d_%s", f.portalID, in.Name),
+		Name:                       in.Name,
+		Labels:                     in.Labels,
+		PrimaryDisplayProperty:     in.PrimaryDisplayProperty,
+		SecondaryDisplayProperties: in.SecondaryDisplayProperties,
+		RequiredProperties:         in.RequiredProperties,
+		SearchableProperties:       in.SearchableProperties,
+		Description:                in.Description,
+		Properties:                 in.Properties,
+	}
+	f.schemas[objectTypeID] = s
+	writeJSON(w, http.StatusCreated, s)
+}
+
+func (f *fakeHubSpot) schemaByType(w http.ResponseWriter, r *http.Request, ref string) {
+	s := f.lookupSchema(ref)
+	switch r.Method {
+	case http.MethodGet:
+		if s == nil {
+			writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "schema not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, s)
+	case http.MethodPatch:
+		if s == nil {
+			writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "schema not found")
+			return
+		}
+		var patch struct {
+			Labels                     *fakeSchemaLabels `json:"labels"`
+			PrimaryDisplayProperty     *string           `json:"primaryDisplayProperty"`
+			SecondaryDisplayProperties *[]string         `json:"secondaryDisplayProperties"`
+			RequiredProperties         *[]string         `json:"requiredProperties"`
+			SearchableProperties       *[]string         `json:"searchableProperties"`
+			Description                *string           `json:"description"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+			writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid JSON")
+			return
+		}
+		if patch.Labels != nil {
+			s.Labels = *patch.Labels
+		}
+		if patch.PrimaryDisplayProperty != nil {
+			s.PrimaryDisplayProperty = *patch.PrimaryDisplayProperty
+		}
+		if patch.SecondaryDisplayProperties != nil {
+			s.SecondaryDisplayProperties = *patch.SecondaryDisplayProperties
+		}
+		if patch.RequiredProperties != nil {
+			s.RequiredProperties = *patch.RequiredProperties
+		}
+		if patch.SearchableProperties != nil {
+			s.SearchableProperties = *patch.SearchableProperties
+		}
+		if patch.Description != nil {
+			s.Description = *patch.Description
+		}
+		writeJSON(w, http.StatusOK, s)
+	case http.MethodDelete:
+		if s == nil {
+			writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "schema not found")
+			return
+		}
+		if r.URL.Query().Get("archived") == "true" {
+			// Hard delete (purge). HubSpot only permits this once the schema is
+			// archived and holds zero records; the fake has no records.
+			delete(f.schemas, s.ObjectTypeID)
+		} else {
+			s.Archived = true // soft delete
+		}
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		writeHubSpotError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", r.Method)
+	}
+}
+
+// deleteSchema simulates out-of-band deletion (for _disappears tests).
+func (f *fakeHubSpot) deleteSchema(objectTypeID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.schemas, objectTypeID)
 }
 
 // normalizeProperty emulates HubSpot server-side normalization.
