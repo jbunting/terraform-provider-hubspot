@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -180,6 +181,12 @@ func TestAccPipeline_basic(t *testing.T) {
 				ResourceName:      "hubspot_pipeline.test",
 				ImportState:       true,
 				ImportStateVerify: true,
+				// Import has no prior config to scope managed metadata keys, so
+				// it stores the full server map best-effort (design decision #9):
+				// deal stages come back with the server-injected `isClosed` key
+				// that managed state omits. A first plan after import reconciles
+				// it; here we skip verifying the metadata maps for that reason.
+				ImportStateVerifyIgnore: []string{"stages.0.metadata", "stages.1.metadata"},
 			},
 		},
 	})
@@ -290,6 +297,180 @@ func TestAccPipeline_replaceOnObjectTypeChange(t *testing.T) {
 						plancheck.ExpectResourceAction("hubspot_pipeline.test", plancheck.ResourceActionReplace),
 					},
 				},
+			},
+		},
+	})
+}
+
+// testAccCheckPipelinePutQueryContains asserts the fake recorded a pipeline PUT
+// whose query string contained substr, proving the guard param was transmitted.
+func testAccCheckPipelinePutQueryContains(f *fakeHubSpot, substr string) resource.TestCheckFunc {
+	return func(*terraform.State) error {
+		q := f.lastPipelinePutQuery()
+		if !strings.Contains(q, substr) {
+			return fmt.Errorf("last pipeline PUT query %q does not contain %q", q, substr)
+		}
+		return nil
+	}
+}
+
+// TestAccPipeline_addRemoveStage exercises the whole-pipeline-PUT add/remove
+// semantics: create with two stages, add a third (in-place update, new stage
+// gets a server id), then remove it again (in-place update, stage gone). It
+// also asserts the update PUT carried validateReferencesBeforeDelete=true.
+func TestAccPipeline_addRemoveStage(t *testing.T) {
+	f, srv := newFakeHubSpot(t)
+
+	two := []stageCfg{
+		{label: "New", order: 0, meta: map[string]string{"probability": "0.1"}},
+		{label: "Won", order: 1, meta: map[string]string{"probability": "1.0"}},
+	}
+	three := []stageCfg{
+		{label: "New", order: 0, meta: map[string]string{"probability": "0.1"}},
+		{label: "Negotiation", order: 1, meta: map[string]string{"probability": "0.5"}},
+		{label: "Won", order: 2, meta: map[string]string{"probability": "1.0"}},
+	}
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: pipelineConfig(srv.URL, "deals", "Growth", two),
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("stages"), knownvalue.ListSizeExact(2)),
+				},
+			},
+			{
+				// Add a stage: in-place update, new stage present with a server id.
+				Config: pipelineConfig(srv.URL, "deals", "Growth", three),
+				Check:  testAccCheckPipelinePutQueryContains(f, "validateReferencesBeforeDelete=true"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("hubspot_pipeline.test", plancheck.ResourceActionUpdate),
+					},
+				},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("stages"), knownvalue.ListSizeExact(3)),
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("stages").AtSliceIndex(1).AtMapKey("label"),
+						knownvalue.StringExact("Negotiation")),
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("stages").AtSliceIndex(1).AtMapKey("stage_id"),
+						knownvalue.StringRegexp(regexp.MustCompile(`^stg_\d+$`))),
+				},
+			},
+			{
+				// Remove the added stage: in-place update, stage set back to two.
+				Config: pipelineConfig(srv.URL, "deals", "Growth", two),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("hubspot_pipeline.test", plancheck.ResourceActionUpdate),
+					},
+				},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("stages"), knownvalue.ListSizeExact(2)),
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("stages").AtSliceIndex(0).AtMapKey("label"),
+						knownvalue.StringExact("New")),
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("stages").AtSliceIndex(1).AtMapKey("label"),
+						knownvalue.StringExact("Won")),
+				},
+			},
+		},
+	})
+}
+
+// TestAccPipeline_ticketLifecycle covers a ticket pipeline: create with
+// ticketState metadata and prove the managed-keys reconciliation lets an
+// identical config plan empty (metadata round-trips with no perpetual diff).
+func TestAccPipeline_ticketLifecycle(t *testing.T) {
+	_, srv := newFakeHubSpot(t)
+
+	stages := []stageCfg{
+		{label: "Open", order: 0, meta: map[string]string{"ticketState": "OPEN"}},
+		{label: "Closed", order: 1, meta: map[string]string{"ticketState": "CLOSED"}},
+	}
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: pipelineConfig(srv.URL, "tickets", "Support", stages),
+				Check:  testAccCheckPipelineExists(srv.URL, "hubspot_pipeline.test"),
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("object_type"), knownvalue.StringExact("tickets")),
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("stages").AtSliceIndex(0).AtMapKey("metadata").AtMapKey("ticketState"),
+						knownvalue.StringExact("OPEN")),
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("stages").AtSliceIndex(1).AtMapKey("metadata").AtMapKey("ticketState"),
+						knownvalue.StringExact("CLOSED")),
+					// Managed-keys reconciliation keeps metadata to exactly the
+					// one key the user set.
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("stages").AtSliceIndex(0).AtMapKey("metadata"),
+						knownvalue.MapSizeExact(1)),
+				},
+			},
+			{
+				// Identical config must plan empty: proves ticket metadata
+				// round-trips cleanly under managed-keys reconciliation.
+				Config: pipelineConfig(srv.URL, "tickets", "Support", stages),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+		},
+	})
+}
+
+// TestAccPipeline_defaultPipelineDeleteError adopts a seeded non-deletable
+// default pipeline via import and asserts that attempting to delete it surfaces
+// the actionable "default pipeline" guidance rather than faking success. A
+// final step removes it out-of-band so the framework's post-test cleanup (which
+// would otherwise hit the same guard) can complete.
+func TestAccPipeline_defaultPipelineDeleteError(t *testing.T) {
+	f, srv := newFakeHubSpot(t)
+
+	f.seedDefaultPipeline("deals", "default", "Sales Pipeline", []fakeStage{
+		{ID: "appointmentscheduled", Label: "Appointment Scheduled", DisplayOrder: 0, Metadata: map[string]string{"probability": "0.2", "isClosed": "false"}},
+		{ID: "closedwon", Label: "Closed Won", DisplayOrder: 1, Metadata: map[string]string{"probability": "1.0", "isClosed": "true"}},
+	})
+
+	stages := []stageCfg{
+		{label: "Appointment Scheduled", order: 0, meta: map[string]string{"probability": "0.2"}},
+		{label: "Closed Won", order: 1, meta: map[string]string{"probability": "1.0"}},
+	}
+	cfg := pipelineConfig(srv.URL, "deals", "Sales Pipeline", stages)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				// Adopt the seeded default pipeline via import.
+				Config:             cfg,
+				ResourceName:       "hubspot_pipeline.test",
+				ImportState:        true,
+				ImportStateId:      "deals/default",
+				ImportStatePersist: true,
+			},
+			{
+				// Attempting to delete the default pipeline surfaces guidance.
+				Config:      cfg,
+				Destroy:     true,
+				ExpectError: regexp.MustCompile(`(?s)default pipeline`),
+			},
+			{
+				// Remove it out-of-band so the final cleanup destroy is a no-op
+				// (Delete treats a 404 as an idempotent success).
+				PreConfig: func() { f.deletePipeline("deals", "default") },
+				Config:    cfg,
+				Destroy:   true,
 			},
 		},
 	})

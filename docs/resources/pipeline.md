@@ -95,7 +95,7 @@ Required:
 
 Optional:
 
-- `metadata` (Map of String) Stage metadata as string values. Deal stages require `probability` (e.g. `"0.2"`, `"1.0"`); ticket stages use `ticketState` (`"OPEN"` or `"CLOSED"`). Values are strings to avoid float diffs.
+- `metadata` (Map of String) Stage metadata as string values. Deal stages require `probability` (e.g. `"0.2"`, `"1.0"`); ticket stages use `ticketState` (`"OPEN"` or `"CLOSED"`). Values are strings to avoid float diffs. Only the keys you set are tracked; HubSpot-injected keys (such as `isClosed` on deal stages) are ignored, so they never cause a perpetual diff. An omitted `metadata` and `metadata = {}` are both valid and round-trip without drift.
 - `stage_id` (String) Stable internal stage ID. Leave unset to let HubSpot assign one (stored back into state); pin it to keep a stage's identity across relabels.
 
 Read-Only:

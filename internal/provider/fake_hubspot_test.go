@@ -109,6 +109,7 @@ type fakeHubSpot struct {
 	portalID        int64
 	pipelineCounter int
 	stageCounter    int
+	lastPipelinePut string // raw query string of the most recent pipeline PUT
 }
 
 func newFakeHubSpot(t *testing.T) (*fakeHubSpot, *httptest.Server) {
@@ -151,6 +152,31 @@ func (f *fakeHubSpot) deletePipeline(objectType, id string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	delete(f.pipelines[objectType], id)
+}
+
+// seedDefaultPipeline installs a pre-existing non-deletable "default" pipeline
+// (like HubSpot's built-in deal pipeline) so tests can adopt it via import and
+// assert that DELETE is rejected with a "default" error.
+func (f *fakeHubSpot) seedDefaultPipeline(objectType, id, label string, stages []fakeStage) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.pipelines[objectType] == nil {
+		f.pipelines[objectType] = map[string]*fakePipeline{}
+	}
+	f.pipelines[objectType][id] = &fakePipeline{
+		ID:      id,
+		Label:   label,
+		Stages:  stages,
+		Default: true,
+	}
+}
+
+// lastPipelinePutQuery returns the raw query string of the most recent pipeline
+// PUT, so update tests can assert the delete-guard params were transmitted.
+func (f *fakeHubSpot) lastPipelinePutQuery() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.lastPipelinePut
 }
 
 func (f *fakeHubSpot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -379,10 +405,15 @@ func (f *fakeHubSpot) ownersRoute(w http.ResponseWriter, r *http.Request, rest [
 		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "owner not found")
 		return
 	}
-	// GET /crm/v3/owners?email=
+	// GET /crm/v3/owners?email=  — like real HubSpot, archived owners are
+	// excluded unless archived=true is requested.
 	emailFilter := r.URL.Query().Get("email")
+	wantArchived := r.URL.Query().Get("archived") == "true"
 	results := make([]*fakeOwner, 0, len(f.owners))
 	for _, o := range f.owners {
+		if o.Archived != wantArchived {
+			continue
+		}
 		if emailFilter != "" && o.Email != emailFilter {
 			continue
 		}
@@ -410,7 +441,13 @@ func (f *fakeHubSpot) pipelinesRoute(w http.ResponseWriter, r *http.Request, res
 
 // assignStages converts input stages into stored stages, honoring a
 // client-pinned stageId/id and otherwise minting a deterministic "stg_N".
-func (f *fakeHubSpot) assignStages(in []fakeStageInput) []fakeStage {
+//
+// It emulates HubSpot server-side metadata normalization: real Pipelines v3
+// always injects an `isClosed` key ("true"/"false") into deal-stage metadata,
+// derived from the stage probability, regardless of what the client sent. The
+// injection is applied to the RETURNED copy only (never the client-sent map),
+// so the provider must tolerate server-injected metadata keys it did not send.
+func (f *fakeHubSpot) assignStages(objectType string, in []fakeStageInput) []fakeStage {
 	stages := make([]fakeStage, 0, len(in))
 	for _, s := range in {
 		id := s.StageID
@@ -421,14 +458,38 @@ func (f *fakeHubSpot) assignStages(in []fakeStageInput) []fakeStage {
 			f.stageCounter++
 			id = fmt.Sprintf("stg_%d", f.stageCounter)
 		}
+		// Copy metadata so injected server keys never leak into the input map.
+		var md map[string]string
+		if s.Metadata != nil {
+			md = make(map[string]string, len(s.Metadata)+1)
+			for k, v := range s.Metadata {
+				md[k] = v
+			}
+		}
+		if objectType == "deals" {
+			if md == nil {
+				md = map[string]string{}
+			}
+			md["isClosed"] = dealStageIsClosed(md["probability"])
+		}
 		stages = append(stages, fakeStage{
 			ID:           id,
 			Label:        s.Label,
 			DisplayOrder: s.DisplayOrder,
-			Metadata:     s.Metadata,
+			Metadata:     md,
 		})
 	}
 	return stages
+}
+
+// dealStageIsClosed derives the server-injected isClosed flag from a deal
+// stage's probability, matching HubSpot's behavior closely enough for tests
+// (0.0 and 1.0 are closed stages).
+func dealStageIsClosed(probability string) string {
+	if probability == "1.0" || probability == "0.0" {
+		return "true"
+	}
+	return "false"
 }
 
 func (f *fakeHubSpot) createPipeline(w http.ResponseWriter, r *http.Request, objectType string) {
@@ -453,7 +514,7 @@ func (f *fakeHubSpot) createPipeline(w http.ResponseWriter, r *http.Request, obj
 		ID:           fmt.Sprintf("pl_%d", f.pipelineCounter),
 		Label:        in.Label,
 		DisplayOrder: in.DisplayOrder,
-		Stages:       f.assignStages(in.Stages),
+		Stages:       f.assignStages(objectType, in.Stages),
 	}
 	f.pipelines[objectType][p.ID] = p
 	writeJSON(w, http.StatusCreated, p)
@@ -469,6 +530,7 @@ func (f *fakeHubSpot) pipelineByID(w http.ResponseWriter, r *http.Request, objec
 		}
 		writeJSON(w, http.StatusOK, p)
 	case http.MethodPut:
+		f.lastPipelinePut = r.URL.RawQuery
 		if p == nil {
 			writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "pipeline not found")
 			return
@@ -484,7 +546,7 @@ func (f *fakeHubSpot) pipelineByID(w http.ResponseWriter, r *http.Request, objec
 		}
 		p.Label = in.Label
 		p.DisplayOrder = in.DisplayOrder
-		p.Stages = f.assignStages(in.Stages)
+		p.Stages = f.assignStages(objectType, in.Stages)
 		writeJSON(w, http.StatusOK, p)
 	case http.MethodDelete:
 		if p == nil {

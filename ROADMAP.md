@@ -48,9 +48,9 @@ Planned improvements:
    ephemeral-resource support (short-lived credential handling).
 4. Re-evaluate defaults at service-key GA.
 
-`data.hubspot_property`, `data.hubspot_properties`, `data.hubspot_owner`,
-`data.hubspot_portal` — read-only glue that lets configurations reference
-HubSpot-defined and unmanaged objects.
+Remaining data source: `data.hubspot_properties` (the list source; the
+singular `hubspot_property`, `hubspot_owner`, and `hubspot_portal` sources
+already shipped above).
 
 ### Phase 2 — schema plane complete (v0.3)
 

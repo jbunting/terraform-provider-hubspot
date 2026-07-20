@@ -76,6 +76,42 @@ data "hubspot_owner" "missing" {
 	})
 }
 
+func TestAccOwnerDataSource_byIDNotFound(t *testing.T) {
+	_, srv := newFakeHubSpot(t)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig(srv.URL) + `
+data "hubspot_owner" "missing" {
+  owner_id = "999"
+}`,
+				ExpectError: regexp.MustCompile(`(?i)no.*owner`),
+			},
+		},
+	})
+}
+
+func TestAccOwnerDataSource_multipleMatch(t *testing.T) {
+	f, srv := newFakeHubSpot(t)
+	f.seedOwner(fakeOwner{ID: "30", Email: "dup@example.com", FirstName: "One", UserID: 1})
+	f.seedOwner(fakeOwner{ID: "31", Email: "dup@example.com", FirstName: "Two", UserID: 2})
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: providerConfig(srv.URL) + `
+data "hubspot_owner" "dup" {
+  email = "dup@example.com"
+}`,
+				ExpectError: regexp.MustCompile(`(?i)multiple`),
+			},
+		},
+	})
+}
+
 func TestAccOwnerDataSource_requiresExactlyOne(t *testing.T) {
 	_, srv := newFakeHubSpot(t)
 
@@ -83,8 +119,18 @@ func TestAccOwnerDataSource_requiresExactlyOne(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config:      providerConfig(srv.URL) + `data "hubspot_owner" "bad" {}`,
+				// Neither set.
+				Config:      providerConfig(srv.URL) + `data "hubspot_owner" "none" {}`,
 				ExpectError: regexp.MustCompile(`(?i)(exactly one|email|owner_id)`),
+			},
+			{
+				// Both set.
+				Config: providerConfig(srv.URL) + `
+data "hubspot_owner" "both" {
+  owner_id = "10"
+  email    = "rep@example.com"
+}`,
+				ExpectError: regexp.MustCompile(`(?i)(exactly one|only one|cannot be)`),
 			},
 		},
 	})

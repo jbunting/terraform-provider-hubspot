@@ -173,7 +173,11 @@ func (r *pipelineResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 							ElementType: types.StringType,
 							MarkdownDescription: "Stage metadata as string values. Deal stages require " +
 								"`probability` (e.g. `\"0.2\"`, `\"1.0\"`); ticket stages use `ticketState` " +
-								"(`\"OPEN\"` or `\"CLOSED\"`). Values are strings to avoid float diffs.",
+								"(`\"OPEN\"` or `\"CLOSED\"`). Values are strings to avoid float diffs. " +
+								"Only the keys you set are tracked; HubSpot-injected keys (such as " +
+								"`isClosed` on deal stages) are ignored, so they never cause a perpetual " +
+								"diff. An omitted `metadata` and `metadata = {}` are both valid and " +
+								"round-trip without drift.",
 						},
 						"id": schema.StringAttribute{
 							Computed:            true,
@@ -519,8 +523,30 @@ func expandPipeline(ctx context.Context, m pipelineResourceModel) (pipelineWire,
 // must already carry object_type. Stages are sorted by the server-assigned
 // displayOrder so a stable order is presented; stage_id and id both adopt the
 // server stage id.
+//
+// Metadata is reconciled semantically (design decision #9): HubSpot injects
+// server-managed keys the client never sent (e.g. `isClosed` on deal stages),
+// so tracking the raw server map would perpetually diff against config. For
+// each stage we keep ONLY the keys the user manages — the keys present in the
+// corresponding stage's metadata in the prior model (the plan for
+// Create/Update, the state for Read) — while taking their VALUES from the
+// server response so server normalization of managed keys is still captured.
+// Server-injected keys are dropped. When there is no prior model (Import),
+// the full server map is stored best-effort; a first plan after import may
+// reconcile metadata against the user's config.
 func flattenPipeline(ctx context.Context, api pipelineWire, m *pipelineResourceModel) diag.Diagnostics {
 	var diags diag.Diagnostics
+
+	// Capture the prior stages before we overwrite m.Stages, so we can learn
+	// which metadata keys the user manages.
+	var priorStages []pipelineStageModel
+	if !m.Stages.IsNull() && !m.Stages.IsUnknown() {
+		diags.Append(m.Stages.ElementsAs(ctx, &priorStages, false)...)
+		if diags.HasError() {
+			return diags
+		}
+	}
+	hasPrior := len(priorStages) > 0
 
 	m.PipelineID = types.StringValue(api.ID)
 	m.ID = types.StringValue(m.ObjectType.ValueString() + "/" + api.ID)
@@ -544,18 +570,34 @@ func flattenPipeline(ctx context.Context, api pipelineWire, m *pipelineResourceM
 		return oi < oj
 	})
 
+	// Match each server stage to its prior-model stage (by the same stable key
+	// matching used elsewhere) so we can scope metadata to managed keys.
+	var matched []*pipelineStageModel
+	if hasPrior {
+		serverModels := make([]pipelineStageModel, len(sorted))
+		for i, s := range sorted {
+			serverModels[i] = pipelineStageModel{
+				Label:   types.StringValue(s.Label),
+				StageID: types.StringValue(s.ID),
+			}
+		}
+		matched = matchStages(serverModels, priorStages)
+	}
+
 	elems := make([]attr.Value, 0, len(sorted))
-	for _, s := range sorted {
+	for i, s := range sorted {
 		order := int64(0)
 		if s.DisplayOrder != nil {
 			order = *s.DisplayOrder
 		}
-		metadata := types.MapNull(types.StringType)
-		if len(s.Metadata) > 0 {
-			mv, mdDiags := types.MapValueFrom(ctx, types.StringType, s.Metadata)
-			diags.Append(mdDiags...)
-			metadata = mv
+
+		var prior *pipelineStageModel
+		if hasPrior {
+			prior = matched[i]
 		}
+		metadata, mdDiags := reconcileStageMetadata(ctx, hasPrior, prior, s.Metadata)
+		diags.Append(mdDiags...)
+
 		obj, objDiags := types.ObjectValue(pipelineStageAttrTypes, map[string]attr.Value{
 			"label":         types.StringValue(s.Label),
 			"stage_id":      types.StringValue(s.ID),
@@ -571,4 +613,53 @@ func flattenPipeline(ctx context.Context, api pipelineWire, m *pipelineResourceM
 	m.Stages = list
 
 	return diags
+}
+
+// reconcileStageMetadata returns the metadata value to store for one stage,
+// dropping server-injected keys. When there is no prior model at all (import),
+// the full server map is returned best-effort. Otherwise only the keys the
+// user manages in the prior stage are kept (values sourced from the server),
+// preserving the null-vs-empty distinction so `metadata = {}` round-trips.
+func reconcileStageMetadata(ctx context.Context, hasPrior bool, prior *pipelineStageModel, serverMeta map[string]string) (types.Map, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	// Import (no prior stages): store the server map best-effort.
+	if !hasPrior {
+		if len(serverMeta) == 0 {
+			return types.MapNull(types.StringType), diags
+		}
+		return types.MapValueFrom(ctx, types.StringType, serverMeta)
+	}
+
+	// A stage the server returned but that did not match any prior stage: keep
+	// the full server map so no user-visible data is silently dropped.
+	if prior == nil {
+		if len(serverMeta) == 0 {
+			return types.MapNull(types.StringType), diags
+		}
+		return types.MapValueFrom(ctx, types.StringType, serverMeta)
+	}
+
+	// A null prior means the user manages no metadata keys on this stage; keep
+	// it null so config-null and state-null agree.
+	if prior.Metadata.IsNull() || prior.Metadata.IsUnknown() {
+		return types.MapNull(types.StringType), diags
+	}
+
+	var priorMeta map[string]string
+	diags.Append(prior.Metadata.ElementsAs(ctx, &priorMeta, false)...)
+	if diags.HasError() {
+		return types.MapNull(types.StringType), diags
+	}
+
+	// Keep only managed keys, taking values from the server response.
+	managed := make(map[string]string, len(priorMeta))
+	for k := range priorMeta {
+		if v, ok := serverMeta[k]; ok {
+			managed[k] = v
+		} else {
+			managed[k] = priorMeta[k]
+		}
+	}
+	return types.MapValueFrom(ctx, types.StringType, managed)
 }
