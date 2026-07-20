@@ -15,14 +15,14 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/tfjsonpath"
 )
 
-func objectSchemaConfig(url, singular, plural string) string {
+func objectSchemaConfig(url, plural string) string {
 	return providerConfig(url) + `
 resource "hubspot_object_schema" "car" {
   name         = "car"
   force_delete = true
 
   labels = {
-    singular = "` + singular + `"
+    singular = "Car"
     plural   = "` + plural + `"
   }
 
@@ -60,7 +60,7 @@ func TestAccObjectSchema_lifecycle(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: objectSchemaConfig(srv.URL, "Car", "Cars"),
+				Config: objectSchemaConfig(srv.URL, "Cars"),
 				ConfigStateChecks: []statecheck.StateCheck{
 					statecheck.ExpectKnownValue("hubspot_object_schema.car",
 						tfjsonpath.New("object_type_id"), knownvalue.StringExact("2-1")),
@@ -77,14 +77,14 @@ func TestAccObjectSchema_lifecycle(t *testing.T) {
 			// Identical config must plan empty (no perpetual diff from server
 			// normalization or bootstrap-property refresh).
 			{
-				Config: objectSchemaConfig(srv.URL, "Car", "Cars"),
+				Config: objectSchemaConfig(srv.URL, "Cars"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
 				},
 			},
 			// Update the plural label in place (PATCH, not replace).
 			{
-				Config: objectSchemaConfig(srv.URL, "Car", "Automobiles"),
+				Config: objectSchemaConfig(srv.URL, "Automobiles"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
 						plancheck.ExpectResourceAction("hubspot_object_schema.car", plancheck.ResourceActionUpdate),
@@ -117,7 +117,7 @@ func TestAccObjectSchema_disappears(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: objectSchemaConfig(srv.URL, "Car", "Cars"),
+				Config: objectSchemaConfig(srv.URL, "Cars"),
 				Check: func(*terraform.State) error {
 					f.deleteSchema("2-1") // vanish out of band
 					return nil

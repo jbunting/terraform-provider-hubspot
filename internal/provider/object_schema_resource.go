@@ -76,15 +76,6 @@ type schemaPropertyModel struct {
 	FieldType types.String `tfsdk:"field_type"`
 }
 
-var schemaPropertyAttrTypes = map[string]attr.Type{
-	"name":       types.StringType,
-	"label":      types.StringType,
-	"type":       types.StringType,
-	"field_type": types.StringType,
-}
-
-var schemaPropertyObjectType = types.ObjectType{AttrTypes: schemaPropertyAttrTypes}
-
 // --- wire shapes ---
 
 type objectSchemaWire struct {
