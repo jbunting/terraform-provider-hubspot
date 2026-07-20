@@ -24,9 +24,9 @@ beta. Only the complete absence of a public API puts a feature out of scope.
 
 ### ✅ Shipped: data sources
 
-`data.hubspot_property`, `data.hubspot_owner`, `data.hubspot_portal` — the
-read-only glue that lets configurations reference HubSpot-defined and
-unmanaged objects. (`data.hubspot_properties` list source still to come.)
+`data.hubspot_property`, `data.hubspot_properties` (list),
+`data.hubspot_owner`, `data.hubspot_portal` — the read-only glue that lets
+configurations reference HubSpot-defined and unmanaged objects.
 
 ### 🔜 Next: service keys & further data sources
 
@@ -48,9 +48,9 @@ Planned improvements:
    ephemeral-resource support (short-lived credential handling).
 4. Re-evaluate defaults at service-key GA.
 
-Remaining data source: `data.hubspot_properties` (the list source; the
-singular `hubspot_property`, `hubspot_owner`, and `hubspot_portal` sources
-already shipped above).
+All read-only glue data sources have now shipped (see above). The next
+data sources arrive alongside their resources in Phase 2 (pipeline, object
+schema, association labels).
 
 ### Phase 2 — schema plane complete (v0.3)
 

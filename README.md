@@ -32,6 +32,7 @@ are re-created, out-of-band edits are corrected), and `terraform import`.
 | Data source | Looks up |
 |---|---|
 | [`hubspot_property`](./docs/data-sources/property.md) | Any property (including HubSpot-defined defaults like `lifecyclestage`) by `object_type` + `name` |
+| [`hubspot_properties`](./docs/data-sources/properties.md) | Every property on an `object_type` (filter with HCL, e.g. custom-only) — the list companion to the singular source |
 | [`hubspot_owner`](./docs/data-sources/owner.md) | A CRM owner by `email` or `owner_id` — the `id` output feeds `hubspot_owner_id` property values |
 | [`hubspot_portal`](./docs/data-sources/portal.md) | The authenticated portal's ID, account type, time zone, currency, and UI domain |
 
@@ -67,7 +68,7 @@ reference in [`docs/`](./docs/) (rendered on the registries once published).
 
 The full public roadmap lives in [`ROADMAP.md`](./ROADMAP.md). In short:
 
-- **Shipped:** properties, property groups, pipelines; data sources for property, owner, and portal
+- **Shipped:** properties, property groups, pipelines; data sources for property, properties (list), owner, and portal
 - **Next (rest of Phase 2):** custom object schemas, association labels
 - **Phase 3:** lists, public-app webhooks
 - **Phase 4:** workflows as code (Automation v4 beta API)

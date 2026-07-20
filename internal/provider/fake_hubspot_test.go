@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -225,6 +226,8 @@ func (f *fakeHubSpot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.groupByName(w, r, objectType, rest[1])
 	case len(rest) == 0 && r.Method == http.MethodPost:
 		f.createProperty(w, r, objectType)
+	case len(rest) == 0 && r.Method == http.MethodGet:
+		f.listProperties(w, r, objectType)
 	case len(rest) == 1 && rest[0] != "groups":
 		f.propertyByName(w, r, objectType, rest[0])
 	default:
@@ -360,6 +363,24 @@ func (f *fakeHubSpot) propertyByName(w http.ResponseWriter, r *http.Request, obj
 	default:
 		writeHubSpotError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", r.Method)
 	}
+}
+
+// listProperties emulates GET /crm/v3/properties/{objectType}. Like real
+// HubSpot, archived properties are excluded unless archived=true, and the
+// results are returned under a "results" envelope (no pagination for the
+// sizes used in tests).
+func (f *fakeHubSpot) listProperties(w http.ResponseWriter, r *http.Request, objectType string) {
+	wantArchived := r.URL.Query().Get("archived") == "true"
+	results := make([]*fakeProperty, 0, len(f.properties[objectType]))
+	for _, p := range f.properties[objectType] {
+		if p.Archived != wantArchived {
+			continue
+		}
+		results = append(results, p)
+	}
+	// Deterministic order by name so tests don't flake on map iteration order.
+	sort.Slice(results, func(i, j int) bool { return results[i].Name < results[j].Name })
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 // normalizeProperty emulates HubSpot server-side normalization.

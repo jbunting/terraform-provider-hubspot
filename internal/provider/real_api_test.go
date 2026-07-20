@@ -349,6 +349,39 @@ func TestAccReal_portalDataSource(t *testing.T) {
 	})
 }
 
+// TestAccReal_propertiesDataSource lists contacts properties from the real
+// portal and asserts the list is non-empty — every HubSpot portal ships
+// dozens of HubSpot-defined contact properties, so this exercises the list
+// endpoint, pagination-free envelope parsing, and flattening against the
+// real API shape.
+func TestAccReal_propertiesDataSource(t *testing.T) {
+	requireRealPortal(t)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: realProviderConfig() + `
+data "hubspot_properties" "contacts" {
+  object_type = "contacts"
+}`,
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("data.hubspot_properties.contacts",
+						tfjsonpath.New("object_type"), knownvalue.StringExact("contacts")),
+				},
+				Check: resource.TestCheckResourceAttrWith(
+					"data.hubspot_properties.contacts", "properties.#",
+					func(v string) error {
+						if v == "0" {
+							return fmt.Errorf("expected at least one contacts property, got %s", v)
+						}
+						return nil
+					}),
+			},
+		},
+	})
+}
+
 // TestAccReal_propertyGroupLifecycle runs the property-group lifecycle
 // against the real portal: create with randomized name, perpetual-diff guard,
 // import round-trip, automatic destroy + CheckDestroy.
