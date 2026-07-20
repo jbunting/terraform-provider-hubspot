@@ -327,6 +327,28 @@ func checkRealResourcesDestroyed(s *terraform.State) error {
 // Tests (no t.Parallel: shared portal, shared rate limits)
 // ---------------------------------------------------------------------------
 
+// TestAccReal_portalDataSource reads the real portal's account info and
+// asserts the reported portal ID matches HUBSPOT_TEST_PORTAL_ID — a
+// read-only sanity check that the data source works against the live API.
+func TestAccReal_portalDataSource(t *testing.T) {
+	requireRealPortal(t)
+
+	wantPortalID := os.Getenv("HUBSPOT_TEST_PORTAL_ID")
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: realProviderConfig() + `data "hubspot_portal" "current" {}`,
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("data.hubspot_portal.current",
+						tfjsonpath.New("portal_id"), knownvalue.StringExact(wantPortalID)),
+				},
+			},
+		},
+	})
+}
+
 // TestAccReal_propertyGroupLifecycle runs the property-group lifecycle
 // against the real portal: create with randomized name, perpetual-diff guard,
 // import round-trip, automatic destroy + CheckDestroy.

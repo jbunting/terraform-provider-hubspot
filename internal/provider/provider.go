@@ -136,7 +136,11 @@ func (p *HubSpotProvider) Resources(_ context.Context) []func() resource.Resourc
 }
 
 func (p *HubSpotProvider) DataSources(_ context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{}
+	return []func() datasource.DataSource{
+		NewPropertyDataSource,
+		NewOwnerDataSource,
+		NewPortalDataSource,
+	}
 }
 
 func (p *HubSpotProvider) Functions(_ context.Context) []func() function.Function {

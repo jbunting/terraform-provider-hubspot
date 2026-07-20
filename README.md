@@ -26,6 +26,14 @@ on immutable-field changes (planned at plan time via `RequiresReplace`, with
 data-loss warnings in the docs), drift detection (out-of-band deletions are
 re-created, out-of-band edits are corrected), and `terraform import`.
 
+### Data sources
+
+| Data source | Looks up |
+|---|---|
+| [`hubspot_property`](./docs/data-sources/property.md) | Any property (including HubSpot-defined defaults like `lifecyclestage`) by `object_type` + `name` |
+| [`hubspot_owner`](./docs/data-sources/owner.md) | A CRM owner by `email` or `owner_id` — the `id` output feeds `hubspot_owner_id` property values |
+| [`hubspot_portal`](./docs/data-sources/portal.md) | The authenticated portal's ID, account type, time zone, currency, and UI domain |
+
 ### Example
 
 ```terraform
