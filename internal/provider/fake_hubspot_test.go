@@ -1167,7 +1167,7 @@ func listResponse(l *fakeList, includeFilters bool) map[string]any {
 		"updatedAt":      "2026-02-02T16:13:48.146Z",
 	}
 	if includeFilters && len(l.FilterBranch) > 0 {
-		out["filterBranch"] = json.RawMessage(l.FilterBranch)
+		out["filterBranch"] = l.FilterBranch
 	}
 	return out
 }
