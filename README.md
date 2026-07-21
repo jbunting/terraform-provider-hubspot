@@ -21,8 +21,9 @@ trail.
 | [`hubspot_property_group`](./docs/resources/property_group.md) | CRM property groups — the named sections that organize properties in the HubSpot UI | Deletes the group | `{object_type}/{name}` |
 | [`hubspot_property`](./docs/resources/property.md) | Custom CRM property definitions on any object type, including enumeration options (list order = display order) and all field types | **Archives** the property — HubSpot reserves the name for ~90 days ("name purgatory"); the provider reports an actionable error if you recreate the name too soon | `{object_type}/{name}` |
 | [`hubspot_pipeline`](./docs/resources/pipeline.md) | Deal, ticket, and custom-object pipelines with inline stages (matched by `stage_id`, so reorders/renames are in-place updates, not destroy-create) | Deletes the pipeline, guarded against orphaning records; the default pipeline is adopt-via-import only | `{object_type}/{pipeline_id}` |
+| [`hubspot_object_schema`](./docs/resources/object_schema.md) | Custom object definitions (Enterprise tier): labels, display/required/searchable properties, bootstrap properties, associations | **Deletes** the object type and all its records — gated behind `force_delete = true`; two-phase archive-then-purge | `{object_type_id}` (e.g. `2-12345`) |
 
-All three resources support the full lifecycle: create, in-place update,
+All four resources support the full lifecycle: create, in-place update,
 replace on immutable-field changes (planned at plan time via `RequiresReplace`,
 with data-loss warnings in the docs), drift detection (out-of-band deletions
 are re-created, out-of-band edits are corrected), and `terraform import`.
@@ -32,6 +33,7 @@ are re-created, out-of-band edits are corrected), and `terraform import`.
 | Data source | Looks up |
 |---|---|
 | [`hubspot_property`](./docs/data-sources/property.md) | Any property (including HubSpot-defined defaults like `lifecyclestage`) by `object_type` + `name` |
+| [`hubspot_properties`](./docs/data-sources/properties.md) | Every property on an `object_type` (filter with HCL, e.g. custom-only) — the list companion to the singular source |
 | [`hubspot_owner`](./docs/data-sources/owner.md) | A CRM owner by `email` or `owner_id` — the `id` output feeds `hubspot_owner_id` property values |
 | [`hubspot_portal`](./docs/data-sources/portal.md) | The authenticated portal's ID, account type, time zone, currency, and UI domain |
 
@@ -67,8 +69,8 @@ reference in [`docs/`](./docs/) (rendered on the registries once published).
 
 The full public roadmap lives in [`ROADMAP.md`](./ROADMAP.md). In short:
 
-- **Shipped:** properties, property groups, pipelines; data sources for property, owner, and portal
-- **Next (rest of Phase 2):** custom object schemas, association labels
+- **Shipped:** properties, property groups, pipelines, custom object schemas; data sources for property, properties (list), owner, and portal
+- **Next (rest of Phase 2):** association labels
 - **Phase 3:** lists, public-app webhooks
 - **Phase 4:** workflows as code (Automation v4 beta API)
 - **Phase 5:** users, `hubspot_crm_record` fixture escape hatch

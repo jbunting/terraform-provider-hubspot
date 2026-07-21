@@ -24,9 +24,12 @@ beta. Only the complete absence of a public API puts a feature out of scope.
 
 ### ✅ Shipped: data sources
 
-`data.hubspot_property`, `data.hubspot_owner`, `data.hubspot_portal` — the
-read-only glue that lets configurations reference HubSpot-defined and
-unmanaged objects. (`data.hubspot_properties` list source still to come.)
+`data.hubspot_property`, `data.hubspot_properties` (list),
+`data.hubspot_owner`, `data.hubspot_portal`, `data.hubspot_pipeline`,
+`data.hubspot_object_schema`, `data.hubspot_association_labels` (list) — the
+read-only glue that lets configurations reference HubSpot-defined and unmanaged
+objects, and resolve portal-specific IDs (custom-object `2-XXXX`, association
+`type_id`) by name.
 
 ### 🔜 Next: service keys & further data sources
 
@@ -48,18 +51,17 @@ Planned improvements:
    ephemeral-resource support (short-lived credential handling).
 4. Re-evaluate defaults at service-key GA.
 
-Remaining data source: `data.hubspot_properties` (the list source; the
-singular `hubspot_property`, `hubspot_owner`, and `hubspot_portal` sources
-already shipped above).
+All read-only glue data sources have now shipped (see above), including the
+Phase 2 additions (pipeline, object schema, association labels).
 
 ### Phase 2 — schema plane complete (v0.3)
 
 | Resource | Backing API | Status |
 |---|---|---|
 | `hubspot_pipeline` (deals/tickets/custom, stages inline) | Pipelines v3 | ✅ shipped |
-| `hubspot_object_schema` (custom objects) | Schemas v3 (Enterprise) | planned |
-| `hubspot_association_label` | Associations v4 | planned |
-| Data sources: pipeline, object schema, association labels | — | planned |
+| `hubspot_object_schema` (custom objects) | Schemas v3 (Enterprise) | ✅ shipped |
+| `hubspot_association_label` (paired/unpaired labels) | Associations v4 | ✅ shipped |
+| Data sources: pipeline, object schema, association labels | — | ✅ shipped |
 
 ### Phase 3 — lists + webhooks (v0.5)
 

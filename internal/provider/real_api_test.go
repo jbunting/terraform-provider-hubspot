@@ -76,6 +76,10 @@ func init() {
 		Dependencies: []string{"hubspot_property"}, // empty groups delete cleanly
 		F:            sweepRealContactPropertyGroups,
 	})
+	resource.AddTestSweepers("hubspot_object_schema", &resource.Sweeper{
+		Name: "hubspot_object_schema",
+		F:    sweepRealObjectSchemas,
+	})
 }
 
 // ---------------------------------------------------------------------------
@@ -349,6 +353,125 @@ func TestAccReal_portalDataSource(t *testing.T) {
 	})
 }
 
+// realObjectSchemaConfig renders a randomized custom object schema.
+func realObjectSchemaConfig(name, plural string, force bool) string {
+	return realProviderConfig() + fmt.Sprintf(`
+resource "hubspot_object_schema" "test" {
+  name         = %q
+  force_delete = %t
+  labels = {
+    singular = "TF Acc Object"
+    plural   = %q
+  }
+  primary_display_property = "acc_name"
+  required_properties      = ["acc_name"]
+  properties = [
+    { name = "acc_name", label = "Name", type = "string", field_type = "text" },
+  ]
+}
+`, name, force, plural)
+}
+
+// TestAccReal_objectSchemaLifecycle runs the custom-object lifecycle against
+// the real portal (Enterprise feature): create → perpetual-diff guard →
+// in-place label update → import round-trip → force_delete destroy, with
+// CheckDestroy confirming the object type is gone.
+func TestAccReal_objectSchemaLifecycle(t *testing.T) {
+	requireRealPortal(t)
+
+	name := randomRealName("obj_")
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             checkRealObjectSchemaDestroyed,
+		Steps: []resource.TestStep{
+			{
+				Config: realObjectSchemaConfig(name, "TF Acc Objects", true),
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("hubspot_object_schema.test",
+						tfjsonpath.New("name"), knownvalue.StringExact(name)),
+				},
+			},
+			{
+				Config: realObjectSchemaConfig(name, "TF Acc Objects", true),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			{
+				Config: realObjectSchemaConfig(name, "TF Acc Vehicles", true),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("hubspot_object_schema.test", plancheck.ResourceActionUpdate),
+					},
+				},
+			},
+			{
+				ResourceName:            "hubspot_object_schema.test",
+				ImportState:             true,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"properties", "associated_objects", "force_delete"},
+			},
+		},
+	})
+}
+
+// checkRealObjectSchemaDestroyed asserts every hubspot_object_schema in state
+// (keyed by objectTypeId) 404s on the real API after destroy.
+func checkRealObjectSchemaDestroyed(s *terraform.State) error {
+	token := os.Getenv("HUBSPOT_ACCESS_TOKEN")
+	if token == "" {
+		return fmt.Errorf("HUBSPOT_ACCESS_TOKEN disappeared mid-test; cannot verify destroy")
+	}
+	for addr, rs := range s.RootModule().Resources {
+		if rs.Type != "hubspot_object_schema" {
+			continue
+		}
+		status, err := realAPIStatus(token, "/crm/v3/schemas/"+rs.Primary.ID)
+		if err != nil {
+			return fmt.Errorf("%s: checking destroy: %w", addr, err)
+		}
+		if status != http.StatusNotFound {
+			return fmt.Errorf("%s: object schema %s still exists after destroy (status %d)",
+				addr, rs.Primary.ID, status)
+		}
+	}
+	return nil
+}
+
+// TestAccReal_propertiesDataSource lists contacts properties from the real
+// portal and asserts the list is non-empty — every HubSpot portal ships
+// dozens of HubSpot-defined contact properties, so this exercises the list
+// endpoint, pagination-free envelope parsing, and flattening against the
+// real API shape.
+func TestAccReal_propertiesDataSource(t *testing.T) {
+	requireRealPortal(t)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: realProviderConfig() + `
+data "hubspot_properties" "contacts" {
+  object_type = "contacts"
+}`,
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("data.hubspot_properties.contacts",
+						tfjsonpath.New("object_type"), knownvalue.StringExact("contacts")),
+				},
+				Check: resource.TestCheckResourceAttrWith(
+					"data.hubspot_properties.contacts", "properties.#",
+					func(v string) error {
+						if v == "0" {
+							return fmt.Errorf("expected at least one contacts property, got %s", v)
+						}
+						return nil
+					}),
+			},
+		},
+	})
+}
+
 // TestAccReal_propertyGroupLifecycle runs the property-group lifecycle
 // against the real portal: create with randomized name, perpetual-diff guard,
 // import round-trip, automatic destroy + CheckDestroy.
@@ -518,6 +641,31 @@ func sweepRealContactPropertyGroups(_ string) error {
 		log.Printf("[INFO] sweeper hubspot_property_group: deleting leaked contacts group %q", name)
 		if err := realAPIDelete(token, "/crm/v3/properties/contacts/groups/"+name); err != nil {
 			return fmt.Errorf("sweeping property group %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func sweepRealObjectSchemas(_ string) error {
+	token, ok, err := sweeperEnv("hubspot_object_schema")
+	if err != nil || !ok {
+		return err
+	}
+	names, err := realAPIListNames(token, "/crm/v3/schemas")
+	if err != nil {
+		return fmt.Errorf("listing object schemas: %w", err)
+	}
+	for _, name := range names {
+		if !strings.HasPrefix(name, realTestPrefix) {
+			continue
+		}
+		log.Printf("[INFO] sweeper hubspot_object_schema: deleting leaked object schema %q", name)
+		// Two-phase: archive, then purge so the name is freed.
+		if err := realAPIDelete(token, "/crm/v3/schemas/"+name); err != nil {
+			return fmt.Errorf("archiving object schema %s: %w", name, err)
+		}
+		if err := realAPIDelete(token, "/crm/v3/schemas/"+name+"?archived=true"); err != nil {
+			return fmt.Errorf("purging object schema %s: %w", name, err)
 		}
 	}
 	return nil
