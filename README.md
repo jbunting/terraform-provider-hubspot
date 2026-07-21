@@ -2,9 +2,9 @@
 
 Manage your HubSpot portal configuration as code. This provider targets the
 HubSpot **configuration plane** — the structural setup of your portal
-(properties, groups, pipelines, custom object schemas) — deliberately **not**
-CRM records (contacts, companies, deals) themselves. It works identically
-with Terraform and OpenTofu.
+(properties, groups, pipelines, custom object schemas, association labels,
+lists) — deliberately **not** CRM records (contacts, companies, deals)
+themselves. It works identically with Terraform and OpenTofu.
 
 **Why?** HubSpot admins have no good answer for promotion, drift, and audit:
 sandbox→production deploys can't promote *edits* to existing assets, the
@@ -22,8 +22,10 @@ trail.
 | [`hubspot_property`](./docs/resources/property.md) | Custom CRM property definitions on any object type, including enumeration options (list order = display order) and all field types | **Archives** the property — HubSpot reserves the name for ~90 days ("name purgatory"); the provider reports an actionable error if you recreate the name too soon | `{object_type}/{name}` |
 | [`hubspot_pipeline`](./docs/resources/pipeline.md) | Deal, ticket, and custom-object pipelines with inline stages (matched by `stage_id`, so reorders/renames are in-place updates, not destroy-create) | Deletes the pipeline, guarded against orphaning records; the default pipeline is adopt-via-import only | `{object_type}/{pipeline_id}` |
 | [`hubspot_object_schema`](./docs/resources/object_schema.md) | Custom object definitions (Enterprise tier): labels, display/required/searchable properties, bootstrap properties, associations | **Deletes** the object type and all its records — gated behind `force_delete = true`; two-phase archive-then-purge | `{object_type_id}` (e.g. `2-12345`) |
+| [`hubspot_association_label`](./docs/resources/association_label.md) | Custom association labels between two object types (Pro/Ent), paired or unpaired | **Deletes** the label — removing it from every record association that uses it | `{from_object_type}/{to_object_type}/{type_id}` |
+| [`hubspot_list`](./docs/resources/list.md) | CRM lists (`MANUAL`/`DYNAMIC`/`SNAPSHOT`) — the list *definition* only, never membership; `filter_branch` is compared semantically to absorb server-injected defaults | **Archives** the list (restorable within 90 days) | `{list_id}` |
 
-All four resources support the full lifecycle: create, in-place update,
+All six resources support the full lifecycle: create, in-place update,
 replace on immutable-field changes (planned at plan time via `RequiresReplace`,
 with data-loss warnings in the docs), drift detection (out-of-band deletions
 are re-created, out-of-band edits are corrected), and `terraform import`.
@@ -36,6 +38,9 @@ are re-created, out-of-band edits are corrected), and `terraform import`.
 | [`hubspot_properties`](./docs/data-sources/properties.md) | Every property on an `object_type` (filter with HCL, e.g. custom-only) — the list companion to the singular source |
 | [`hubspot_owner`](./docs/data-sources/owner.md) | A CRM owner by `email` or `owner_id` — the `id` output feeds `hubspot_owner_id` property values |
 | [`hubspot_portal`](./docs/data-sources/portal.md) | The authenticated portal's ID, account type, time zone, currency, and UI domain |
+| [`hubspot_pipeline`](./docs/data-sources/pipeline.md) | A pipeline (and its stages) by `object_type` + `pipeline_id` — e.g. to reference the built-in `default` pipeline's stage IDs |
+| [`hubspot_object_schema`](./docs/data-sources/object_schema.md) | A custom object schema by name, resolving its portal-specific `object_type_id` (`2-XXXX`) |
+| [`hubspot_association_labels`](./docs/data-sources/association_labels.md) | Every association label between an object-type pair — resolve portal-specific `type_id`s by name |
 
 ### Example
 
@@ -69,9 +74,8 @@ reference in [`docs/`](./docs/) (rendered on the registries once published).
 
 The full public roadmap lives in [`ROADMAP.md`](./ROADMAP.md). In short:
 
-- **Shipped:** properties, property groups, pipelines, custom object schemas; data sources for property, properties (list), owner, and portal
-- **Next (rest of Phase 2):** association labels
-- **Phase 3:** lists, public-app webhooks
+- **Shipped:** properties, property groups, pipelines, custom object schemas, association labels, lists; data sources for property, properties (list), owner, portal, pipeline, object schema, and association labels
+- **Next (rest of Phase 3):** list membership (static-list fixtures), public-app webhooks
 - **Phase 4:** workflows as code (Automation v4 beta API)
 - **Phase 5:** users, `hubspot_crm_record` fixture escape hatch
 - **Phase 6:** v1.0 hardening + publication to both registries
@@ -126,7 +130,10 @@ object type**:
 | Company properties/groups | `crm.schemas.companies.read`, `crm.schemas.companies.write` |
 | Deal properties/groups | `crm.schemas.deals.read`, `crm.schemas.deals.write` |
 | Custom-object properties/groups | `crm.schemas.custom.read`, `crm.schemas.custom.write` |
+| Custom object schemas | `crm.schemas.custom.read`, `crm.schemas.custom.write` (Enterprise tier) |
 | Deal/ticket pipelines | `crm.pipelines.write` (+ `crm.objects.deals.write` / `crm.objects.tickets.write`) |
+| Association labels | the read/write schema scopes of both object types (Pro/Ent for custom labels) |
+| Lists | `crm.lists.read`, `crm.lists.write` |
 | Owners / portal data sources | `crm.objects.owners.read` (owners); no scope needed for portal |
 
 The provider never requests or uses CRM **record** scopes
