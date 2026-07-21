@@ -18,21 +18,22 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/tfjsonpath"
 )
 
-// associationLabelConfig renders a hubspot_association_label resource "test".
-// inverseLabel is emitted only when non-empty (unpaired otherwise).
-func associationLabelConfig(baseURL, from, to, name, label, inverseLabel string) string {
+// associationLabelConfig renders a hubspot_association_label resource "test"
+// from `contacts` to the given `to` object type. inverseLabel is emitted only
+// when non-empty (unpaired otherwise).
+func associationLabelConfig(baseURL, to, name, label, inverseLabel string) string {
 	inv := ""
 	if inverseLabel != "" {
 		inv = fmt.Sprintf("  inverse_label    = %q\n", inverseLabel)
 	}
 	return providerConfig(baseURL) + fmt.Sprintf(`
 resource "hubspot_association_label" "test" {
-  from_object_type = %q
+  from_object_type = "contacts"
   to_object_type   = %q
   name             = %q
   label            = %q
 %s}
-`, from, to, name, label, inv)
+`, to, name, label, inv)
 }
 
 // testAccCheckAssociationLabelExists asserts the label recorded in state is
@@ -92,7 +93,7 @@ func TestAccAssociationLabel_basic(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: associationLabelConfig(srv.URL, "contacts", "companies", "decision_maker", "Decision Maker", ""),
+				Config: associationLabelConfig(srv.URL, "companies", "decision_maker", "Decision Maker", ""),
 				Check:  testAccCheckAssociationLabelExists(srv.URL, "hubspot_association_label.test"),
 				ConfigStateChecks: []statecheck.StateCheck{
 					statecheck.ExpectKnownValue("hubspot_association_label.test",
@@ -113,14 +114,14 @@ func TestAccAssociationLabel_basic(t *testing.T) {
 			},
 			{
 				// Identical config must plan empty.
-				Config: associationLabelConfig(srv.URL, "contacts", "companies", "decision_maker", "Decision Maker", ""),
+				Config: associationLabelConfig(srv.URL, "companies", "decision_maker", "Decision Maker", ""),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
 				},
 			},
 			{
 				// Edit the label text: in-place update, type_id preserved.
-				Config: associationLabelConfig(srv.URL, "contacts", "companies", "decision_maker", "Primary Decision Maker", ""),
+				Config: associationLabelConfig(srv.URL, "companies", "decision_maker", "Primary Decision Maker", ""),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
 						plancheck.ExpectResourceAction("hubspot_association_label.test", plancheck.ResourceActionUpdate),
@@ -155,7 +156,7 @@ func TestAccAssociationLabel_paired(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: associationLabelConfig(srv.URL, "contacts", "contacts", "manager_report", "Manager", "Report"),
+				Config: associationLabelConfig(srv.URL, "contacts", "manager_report", "Manager", "Report"),
 				Check:  testAccCheckAssociationLabelExists(srv.URL, "hubspot_association_label.test"),
 				ConfigStateChecks: []statecheck.StateCheck{
 					statecheck.ExpectKnownValue("hubspot_association_label.test",
@@ -169,13 +170,13 @@ func TestAccAssociationLabel_paired(t *testing.T) {
 				},
 			},
 			{
-				Config: associationLabelConfig(srv.URL, "contacts", "contacts", "manager_report", "Manager", "Report"),
+				Config: associationLabelConfig(srv.URL, "contacts", "manager_report", "Manager", "Report"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
 				},
 			},
 			{
-				Config: associationLabelConfig(srv.URL, "contacts", "contacts", "manager_report", "Line Manager", "Direct Report"),
+				Config: associationLabelConfig(srv.URL, "contacts", "manager_report", "Line Manager", "Direct Report"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
 						plancheck.ExpectResourceAction("hubspot_association_label.test", plancheck.ResourceActionUpdate),
@@ -204,10 +205,10 @@ func TestAccAssociationLabel_replaceOnInverseFlip(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: associationLabelConfig(srv.URL, "contacts", "companies", "advisor", "Advisor", ""),
+				Config: associationLabelConfig(srv.URL, "companies", "advisor", "Advisor", ""),
 			},
 			{
-				Config:             associationLabelConfig(srv.URL, "contacts", "companies", "advisor", "Advisor", "Advisee"),
+				Config:             associationLabelConfig(srv.URL, "companies", "advisor", "Advisor", "Advisee"),
 				PlanOnly:           true,
 				ExpectNonEmptyPlan: true,
 				ConfigPlanChecks: resource.ConfigPlanChecks{
@@ -229,7 +230,7 @@ func TestAccAssociationLabel_disappears(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config: associationLabelConfig(srv.URL, "contacts", "companies", "vanishing", "Vanishing", ""),
+				Config: associationLabelConfig(srv.URL, "companies", "vanishing", "Vanishing", ""),
 			},
 			{
 				PreConfig: func() {
@@ -257,7 +258,7 @@ func TestAccAssociationLabel_hubspotDefinedImportError(t *testing.T) {
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 		Steps: []resource.TestStep{
 			{
-				Config:        associationLabelConfig(srv.URL, "contacts", "companies", "primary", "Primary", ""),
+				Config:        associationLabelConfig(srv.URL, "companies", "primary", "Primary", ""),
 				ResourceName:  "hubspot_association_label.test",
 				ImportState:   true,
 				ImportStateId: "contacts/companies/1",
