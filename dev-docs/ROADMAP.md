@@ -20,8 +20,8 @@ HubSpot **Service Keys** (public beta Feb 2026; `developers.hubspot.com/changelo
 ## Phase 1 — v0.1 "properties-as-code" (MVP)
 `hubspot_property_group`, `hubspot_property` (all types, enum option ordering, calculation_formula, validation rules block), data sources `hubspot_property`/`hubspot_properties`, `hubspot_owner`, `hubspot_portal`. Import from day one. This alone is adoptable — property drift is the #1 admin pain.
 
-## Phase 2 — v0.3 schema plane complete
-`hubspot_object_schema`, `hubspot_pipeline` (stage-diff engine keyed on stage_id + validateReferences), `hubspot_association_label`; data sources `hubspot_pipeline`, `hubspot_object_schema`, `hubspot_association_labels`.
+## Phase 2 — v0.3 schema plane complete ✅
+`hubspot_object_schema`, `hubspot_pipeline` (stage-diff engine keyed on stage_id + validateReferences), `hubspot_association_label`; data sources `hubspot_pipeline`, `hubspot_object_schema`, `hubspot_association_labels`. **All shipped.** Association-label note: HubSpot never returns the create-time `name`, so it is write-only (RequiresReplace, `ImportStateVerifyIgnore`) and unrecoverable on import; paired labels (`inverse_label`) mint two directional `type_id`s and reading the inverse text takes a second GET on the reverse pair; paired↔unpaired flips force replacement.
 
 ## Phase 3 — v0.5 lists + webhooks
 `hubspot_list` (JSON filter semantic-equality custom type — highest-risk item, timebox it), `hubspot_list_membership`, `hubspot_webhook_settings`, `hubspot_webhook_subscription` (+ `developer_api_key` config path).

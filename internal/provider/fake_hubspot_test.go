@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -144,17 +145,46 @@ type fakeSchemaInput struct {
 	AssociatedObjects          []string             `json:"associatedObjects"`
 }
 
+// fakeAssocLabel is one association label definition as stored/returned by the
+// fake Associations v4 API. The wire response includes only category, typeId
+// and label — HubSpot never echoes back the `name` sent at creation, so Name
+// and InverseTypeID are internal bookkeeping (json:"-") the provider cannot
+// read back.
+type fakeAssocLabel struct {
+	Category      string `json:"category"`
+	TypeID        int64  `json:"typeId"`
+	Label         string `json:"label"`
+	Name          string `json:"-"` // create-time identifier; never serialized
+	InverseTypeID int64  `json:"-"` // reverse-pair typeId (0 = unpaired)
+}
+
+// fakeLabelInput is the POST create body.
+type fakeLabelInput struct {
+	Label        string `json:"label"`
+	Name         string `json:"name"`
+	InverseLabel string `json:"inverseLabel"`
+}
+
+// fakeLabelUpdate is the PUT update body.
+type fakeLabelUpdate struct {
+	AssociationTypeID int64  `json:"associationTypeId"`
+	Label             string `json:"label"`
+	InverseLabel      string `json:"inverseLabel"`
+}
+
 type fakeHubSpot struct {
 	mu              sync.Mutex
 	groups          map[string]map[string]*fakeGroup    // objectType -> name -> group
 	properties      map[string]map[string]*fakeProperty // objectType -> name -> property
 	pipelines       map[string]map[string]*fakePipeline // objectType -> pipelineId -> pipeline
 	schemas         map[string]*fakeObjectSchema        // objectTypeId -> schema
+	labels          map[string][]*fakeAssocLabel        // "from/to" -> labels
 	owners          []*fakeOwner
 	portalID        int64
 	pipelineCounter int
 	stageCounter    int
 	schemaCounter   int
+	labelCounter    int64
 	lastPipelinePut string // raw query string of the most recent pipeline PUT
 }
 
@@ -165,6 +195,7 @@ func newFakeHubSpot(t *testing.T) (*fakeHubSpot, *httptest.Server) {
 		properties: map[string]map[string]*fakeProperty{},
 		pipelines:  map[string]map[string]*fakePipeline{},
 		schemas:    map[string]*fakeObjectSchema{},
+		labels:     map[string][]*fakeAssocLabel{},
 		portalID:   123456,
 	}
 	srv := httptest.NewServer(f)
@@ -255,6 +286,12 @@ func (f *fakeHubSpot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// crm/v3/schemas[/{objectType}] — resource hubspot_object_schema.
 	if len(parts) >= 3 && parts[0] == "crm" && parts[1] == "v3" && parts[2] == "schemas" {
 		f.schemasRoute(w, r, parts[3:])
+		return
+	}
+	// crm/v4/associations/{from}/{to}/labels[/{typeId}] — resource
+	// hubspot_association_label.
+	if len(parts) >= 6 && parts[0] == "crm" && parts[1] == "v4" && parts[2] == "associations" && parts[5] == "labels" {
+		f.associationLabelsRoute(w, r, parts[3], parts[4], parts[6:])
 		return
 	}
 
@@ -785,6 +822,151 @@ func (f *fakeHubSpot) pipelineByID(w http.ResponseWriter, r *http.Request, objec
 	default:
 		writeHubSpotError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", r.Method)
 	}
+}
+
+// seedAssociationLabel installs a pre-existing label (e.g. a HUBSPOT_DEFINED
+// one) so import-error tests can adopt it.
+func (f *fakeHubSpot) seedAssociationLabel(from, to string, l fakeAssocLabel) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	label := l
+	f.labels[from+"/"+to] = append(f.labels[from+"/"+to], &label)
+}
+
+// deleteAssociationLabelOOB simulates out-of-band deletion (for _disappears
+// tests), removing the label (and its paired reverse entry) by typeId.
+func (f *fakeHubSpot) deleteAssociationLabelOOB(from, to string, typeID int64) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removeLabelLocked(from, to, typeID)
+}
+
+// removeLabelLocked drops the label with typeID from from/to and, if it is
+// paired, its reverse entry from to/from. Caller holds f.mu.
+func (f *fakeHubSpot) removeLabelLocked(from, to string, typeID int64) {
+	key := from + "/" + to
+	var inverseTypeID int64
+	kept := f.labels[key][:0]
+	for _, l := range f.labels[key] {
+		if l.TypeID == typeID {
+			inverseTypeID = l.InverseTypeID
+			continue
+		}
+		kept = append(kept, l)
+	}
+	f.labels[key] = kept
+	if inverseTypeID == 0 {
+		return
+	}
+	rkey := to + "/" + from
+	rkept := f.labels[rkey][:0]
+	for _, l := range f.labels[rkey] {
+		if l.TypeID == inverseTypeID {
+			continue
+		}
+		rkept = append(rkept, l)
+	}
+	f.labels[rkey] = rkept
+}
+
+// associationLabelsRoute dispatches /crm/v4/associations/{from}/{to}/labels
+// and .../labels/{typeId}.
+func (f *fakeHubSpot) associationLabelsRoute(w http.ResponseWriter, r *http.Request, from, to string, rest []string) {
+	switch {
+	case len(rest) == 0 && r.Method == http.MethodGet:
+		writeJSON(w, http.StatusOK, map[string]any{"results": f.labels[from+"/"+to]})
+	case len(rest) == 0 && r.Method == http.MethodPost:
+		f.createAssociationLabel(w, r, from, to)
+	case len(rest) == 0 && r.Method == http.MethodPut:
+		f.updateAssociationLabel(w, r, from, to)
+	case len(rest) == 1 && r.Method == http.MethodDelete:
+		f.deleteAssociationLabel(w, r, from, to, rest[0])
+	default:
+		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "unhandled route "+r.Method+" "+r.URL.Path)
+	}
+}
+
+func (f *fakeHubSpot) createAssociationLabel(w http.ResponseWriter, r *http.Request, from, to string) {
+	var in fakeLabelInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid JSON: "+err.Error())
+		return
+	}
+	if in.Label == "" {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "label is required")
+		return
+	}
+	f.labelCounter++
+	fwdID := f.labelCounter
+	fwd := &fakeAssocLabel{Category: "USER_DEFINED", TypeID: fwdID, Label: in.Label, Name: in.Name}
+	results := []*fakeAssocLabel{fwd}
+	if in.InverseLabel != "" {
+		f.labelCounter++
+		invID := f.labelCounter
+		inv := &fakeAssocLabel{Category: "USER_DEFINED", TypeID: invID, Label: in.InverseLabel, InverseTypeID: fwdID}
+		fwd.InverseTypeID = invID
+		f.labels[to+"/"+from] = append(f.labels[to+"/"+from], inv)
+		results = append(results, inv)
+	}
+	f.labels[from+"/"+to] = append(f.labels[from+"/"+to], fwd)
+	writeJSON(w, http.StatusCreated, map[string]any{"results": results})
+}
+
+func (f *fakeHubSpot) updateAssociationLabel(w http.ResponseWriter, r *http.Request, from, to string) {
+	var in fakeLabelUpdate
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid JSON: "+err.Error())
+		return
+	}
+	var fwd *fakeAssocLabel
+	for _, l := range f.labels[from+"/"+to] {
+		if l.TypeID == in.AssociationTypeID {
+			fwd = l
+			break
+		}
+	}
+	if fwd == nil {
+		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "association label not found")
+		return
+	}
+	if in.Label != "" {
+		fwd.Label = in.Label
+	}
+	if in.InverseLabel != "" && fwd.InverseTypeID != 0 {
+		for _, l := range f.labels[to+"/"+from] {
+			if l.TypeID == fwd.InverseTypeID {
+				l.Label = in.InverseLabel
+				break
+			}
+		}
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (f *fakeHubSpot) deleteAssociationLabel(w http.ResponseWriter, _ *http.Request, from, to, typeIDStr string) {
+	typeID, err := strconv.ParseInt(typeIDStr, 10, 64)
+	if err != nil {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid typeId: "+typeIDStr)
+		return
+	}
+	var fwd *fakeAssocLabel
+	for _, l := range f.labels[from+"/"+to] {
+		if l.TypeID == typeID {
+			fwd = l
+			break
+		}
+	}
+	if fwd == nil {
+		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "association label not found")
+		return
+	}
+	if fwd.Category == "HUBSPOT_DEFINED" {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR",
+			"a HubSpot-defined association label cannot be deleted")
+		return
+	}
+	f.removeLabelLocked(from, to, typeID)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
