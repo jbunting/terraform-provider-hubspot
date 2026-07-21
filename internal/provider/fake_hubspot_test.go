@@ -172,6 +172,26 @@ type fakeLabelUpdate struct {
 	InverseLabel      string `json:"inverseLabel"`
 }
 
+// fakeList is a CRM list as stored by the fake. FilterBranch is stored
+// normalized (server defaults injected) and only echoed when includeFilters is
+// requested, mirroring the Lists v3 API.
+type fakeList struct {
+	ListID         string
+	Name           string
+	ObjectTypeID   string
+	ProcessingType string
+	FilterBranch   json.RawMessage // normalized; empty for MANUAL
+	Archived       bool
+}
+
+// fakeListInput is the POST create body.
+type fakeListInput struct {
+	Name           string          `json:"name"`
+	ObjectTypeID   string          `json:"objectTypeId"`
+	ProcessingType string          `json:"processingType"`
+	FilterBranch   json.RawMessage `json:"filterBranch"`
+}
+
 type fakeHubSpot struct {
 	mu              sync.Mutex
 	groups          map[string]map[string]*fakeGroup    // objectType -> name -> group
@@ -179,12 +199,14 @@ type fakeHubSpot struct {
 	pipelines       map[string]map[string]*fakePipeline // objectType -> pipelineId -> pipeline
 	schemas         map[string]*fakeObjectSchema        // objectTypeId -> schema
 	labels          map[string][]*fakeAssocLabel        // "from/to" -> labels
+	lists           map[string]*fakeList                // listId -> list
 	owners          []*fakeOwner
 	portalID        int64
 	pipelineCounter int
 	stageCounter    int
 	schemaCounter   int
 	labelCounter    int64
+	listCounter     int
 	lastPipelinePut string // raw query string of the most recent pipeline PUT
 }
 
@@ -196,6 +218,7 @@ func newFakeHubSpot(t *testing.T) (*fakeHubSpot, *httptest.Server) {
 		pipelines:  map[string]map[string]*fakePipeline{},
 		schemas:    map[string]*fakeObjectSchema{},
 		labels:     map[string][]*fakeAssocLabel{},
+		lists:      map[string]*fakeList{},
 		portalID:   123456,
 	}
 	srv := httptest.NewServer(f)
@@ -292,6 +315,11 @@ func (f *fakeHubSpot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// hubspot_association_label.
 	if len(parts) >= 6 && parts[0] == "crm" && parts[1] == "v4" && parts[2] == "associations" && parts[5] == "labels" {
 		f.associationLabelsRoute(w, r, parts[3], parts[4], parts[6:])
+		return
+	}
+	// crm/v3/lists[/...] — resource hubspot_list.
+	if len(parts) >= 3 && parts[0] == "crm" && parts[1] == "v3" && parts[2] == "lists" {
+		f.listsRoute(w, r, parts[3:])
 		return
 	}
 
@@ -967,6 +995,181 @@ func (f *fakeHubSpot) deleteAssociationLabel(w http.ResponseWriter, _ *http.Requ
 	}
 	f.removeLabelLocked(from, to, typeID)
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteListOOB simulates out-of-band deletion (for _disappears tests).
+func (f *fakeHubSpot) deleteListOOB(listID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.lists, listID)
+}
+
+// listsRoute dispatches /crm/v3/lists[/{listId}[/{action}]].
+func (f *fakeHubSpot) listsRoute(w http.ResponseWriter, r *http.Request, rest []string) {
+	switch {
+	case len(rest) == 0 && r.Method == http.MethodPost:
+		f.createList(w, r)
+	case len(rest) == 1 && r.Method == http.MethodGet:
+		f.getList(w, r, rest[0])
+	case len(rest) == 1 && r.Method == http.MethodDelete:
+		f.deleteList(w, rest[0])
+	case len(rest) == 2 && r.Method == http.MethodPut && rest[1] == "update-list-name":
+		f.updateListName(w, r, rest[0])
+	case len(rest) == 2 && r.Method == http.MethodPut && rest[1] == "update-list-filters":
+		f.updateListFilters(w, r, rest[0])
+	case len(rest) == 2 && r.Method == http.MethodPut && rest[1] == "restore":
+		f.restoreList(w, rest[0])
+	default:
+		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "unhandled route "+r.Method+" "+r.URL.Path)
+	}
+}
+
+// normalizeFilterBranch emulates HubSpot's server-side expansion of a filter
+// tree: it injects filterBranchOperator (= filterBranchType) on every branch
+// and includeObjectsWithNoValueSet=false on every filter operation, unless
+// already present. Returns the re-marshaled JSON.
+func normalizeFilterBranch(raw json.RawMessage) json.RawMessage {
+	if len(raw) == 0 {
+		return raw
+	}
+	var tree any
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		return raw
+	}
+	injectFilterDefaults(tree)
+	out, err := json.Marshal(tree)
+	if err != nil {
+		return raw
+	}
+	return out
+}
+
+func injectFilterDefaults(node any) {
+	m, ok := node.(map[string]any)
+	if !ok {
+		if arr, ok := node.([]any); ok {
+			for _, e := range arr {
+				injectFilterDefaults(e)
+			}
+		}
+		return
+	}
+	if t, ok := m["filterBranchType"]; ok {
+		if _, has := m["filterBranchOperator"]; !has {
+			m["filterBranchOperator"] = t
+		}
+	}
+	if op, ok := m["operation"].(map[string]any); ok {
+		if _, has := op["includeObjectsWithNoValueSet"]; !has {
+			op["includeObjectsWithNoValueSet"] = false
+		}
+	}
+	for _, v := range m {
+		injectFilterDefaults(v)
+	}
+}
+
+func (f *fakeHubSpot) createList(w http.ResponseWriter, r *http.Request) {
+	var in fakeListInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid JSON: "+err.Error())
+		return
+	}
+	if in.Name == "" || in.ObjectTypeID == "" || in.ProcessingType == "" {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "name, objectTypeId and processingType are required")
+		return
+	}
+	f.listCounter++
+	l := &fakeList{
+		ListID:         fmt.Sprintf("%d", f.listCounter),
+		Name:           in.Name,
+		ObjectTypeID:   in.ObjectTypeID,
+		ProcessingType: in.ProcessingType,
+		FilterBranch:   normalizeFilterBranch(in.FilterBranch),
+	}
+	f.lists[l.ListID] = l
+	// Create response mirrors HubSpot: no filterBranch echoed.
+	writeJSON(w, http.StatusCreated, map[string]any{"list": listResponse(l, false)})
+}
+
+func (f *fakeHubSpot) getList(w http.ResponseWriter, r *http.Request, listID string) {
+	l := f.lists[listID]
+	if l == nil || l.Archived {
+		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "list not found")
+		return
+	}
+	includeFilters := r.URL.Query().Get("includeFilters") == "true"
+	writeJSON(w, http.StatusOK, map[string]any{"list": listResponse(l, includeFilters)})
+}
+
+func (f *fakeHubSpot) updateListName(w http.ResponseWriter, r *http.Request, listID string) {
+	l := f.lists[listID]
+	if l == nil || l.Archived {
+		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "list not found")
+		return
+	}
+	name := r.URL.Query().Get("listName")
+	if name == "" {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "listName query parameter is required")
+		return
+	}
+	l.Name = name
+	writeJSON(w, http.StatusOK, map[string]any{"list": listResponse(l, false)})
+}
+
+func (f *fakeHubSpot) updateListFilters(w http.ResponseWriter, r *http.Request, listID string) {
+	l := f.lists[listID]
+	if l == nil || l.Archived {
+		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "list not found")
+		return
+	}
+	var body struct {
+		FilterBranch json.RawMessage `json:"filterBranch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid JSON: "+err.Error())
+		return
+	}
+	l.FilterBranch = normalizeFilterBranch(body.FilterBranch)
+	writeJSON(w, http.StatusOK, map[string]any{"list": listResponse(l, true)})
+}
+
+func (f *fakeHubSpot) deleteList(w http.ResponseWriter, listID string) {
+	l := f.lists[listID]
+	if l == nil || l.Archived {
+		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "list not found")
+		return
+	}
+	l.Archived = true // archive, not hard delete
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (f *fakeHubSpot) restoreList(w http.ResponseWriter, listID string) {
+	l := f.lists[listID]
+	if l == nil {
+		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "list not found")
+		return
+	}
+	l.Archived = false
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// listResponse builds the JSON list object, echoing filterBranch only when
+// requested (matching includeFilters semantics).
+func listResponse(l *fakeList, includeFilters bool) map[string]any {
+	out := map[string]any{
+		"listId":         l.ListID,
+		"name":           l.Name,
+		"objectTypeId":   l.ObjectTypeID,
+		"processingType": l.ProcessingType,
+		"listVersion":    1,
+		"createdAt":      "2026-02-02T16:13:48.146Z",
+		"updatedAt":      "2026-02-02T16:13:48.146Z",
+	}
+	if includeFilters && len(l.FilterBranch) > 0 {
+		out["filterBranch"] = l.FilterBranch
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

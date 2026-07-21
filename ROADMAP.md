@@ -65,11 +65,11 @@ Phase 2 additions (pipeline, object schema, association labels).
 
 ### Phase 3 — lists + webhooks (v0.5)
 
-| Resource | Backing API |
-|---|---|
-| `hubspot_list` (dynamic/static/snapshot, JSON filter tree) | Lists v3 |
-| `hubspot_list_membership` (static lists, fixtures) | Lists v3 |
-| `hubspot_webhook_settings`, `hubspot_webhook_subscription` (public apps; needs a developer API key) | Webhooks v3 |
+| Resource | Backing API | Status |
+|---|---|---|
+| `hubspot_list` (dynamic/static/snapshot, JSON filter tree) | Lists v3 | ✅ shipped |
+| `hubspot_list_membership` (static lists, fixtures) | Lists v3 | planned |
+| `hubspot_webhook_settings`, `hubspot_webhook_subscription` (public apps; needs a developer API key) | Webhooks v3 | planned |
 
 ### Phase 4 — workflows (v0.6, beta API)
 
