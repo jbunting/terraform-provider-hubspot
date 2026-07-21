@@ -78,3 +78,16 @@ resource "hubspot_list" "vip_accounts" {
 
 - `id` (String) The list's ILS ID (identical to `list_id`).
 - `list_id` (String) Server-assigned ILS list ID.
+
+## Import
+
+Import is supported using the following syntax:
+
+The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/commands/import) can be used, for example:
+
+```shell
+# Lists are imported using their ILS list ID.
+# The configured filter_branch is reconciled semantically on the next plan, so a
+# textual difference from HubSpot's normalized form does not force a change.
+terraform import hubspot_list.engaged_contacts '611'
+```
