@@ -22,7 +22,13 @@ beta. Only the complete absence of a public API puts a feature out of scope.
 | `hubspot_property_group` | Full lifecycle + import |
 | `hubspot_property` | All field types, ordered enumeration options, archive-aware destroy, name-purgatory handling, import |
 
-### 🔜 Next: service keys & data sources
+### ✅ Shipped: data sources
+
+`data.hubspot_property`, `data.hubspot_owner`, `data.hubspot_portal` — the
+read-only glue that lets configurations reference HubSpot-defined and
+unmanaged objects. (`data.hubspot_properties` list source still to come.)
+
+### 🔜 Next: service keys & further data sources
 
 **Improved service key usage.** HubSpot Service Keys (public beta since
 Feb 2026) are the designated successor to legacy private apps for

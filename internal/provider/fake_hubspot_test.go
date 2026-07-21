@@ -56,10 +56,21 @@ type fakeProperty struct {
 	Calculated     bool         `json:"calculated"`
 }
 
+type fakeOwner struct {
+	ID        string `json:"id"`
+	Email     string `json:"email"`
+	FirstName string `json:"firstName"`
+	LastName  string `json:"lastName"`
+	UserID    int64  `json:"userId"`
+	Archived  bool   `json:"archived"`
+}
+
 type fakeHubSpot struct {
 	mu         sync.Mutex
 	groups     map[string]map[string]*fakeGroup    // objectType -> name -> group
 	properties map[string]map[string]*fakeProperty // objectType -> name -> property
+	owners     []*fakeOwner
+	portalID   int64
 }
 
 func newFakeHubSpot(t *testing.T) (*fakeHubSpot, *httptest.Server) {
@@ -67,10 +78,19 @@ func newFakeHubSpot(t *testing.T) (*fakeHubSpot, *httptest.Server) {
 	f := &fakeHubSpot{
 		groups:     map[string]map[string]*fakeGroup{},
 		properties: map[string]map[string]*fakeProperty{},
+		portalID:   123456,
 	}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	return f, srv
+}
+
+// seedOwner registers an owner so the hubspot_owner data source can find it.
+func (f *fakeHubSpot) seedOwner(o fakeOwner) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	owner := o
+	f.owners = append(f.owners, &owner)
 }
 
 // deleteProperty simulates out-of-band deletion (for _disappears tests).
@@ -94,7 +114,22 @@ func (f *fakeHubSpot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
-	// Expected shapes:
+
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// account-info/v3/details — portal identity (data source hubspot_portal).
+	if len(parts) == 3 && parts[0] == "account-info" && parts[1] == "v3" && parts[2] == "details" {
+		f.accountInfo(w, r)
+		return
+	}
+	// crm/v3/owners[/{ownerId}] — read-only (data source hubspot_owner).
+	if len(parts) >= 3 && parts[0] == "crm" && parts[1] == "v3" && parts[2] == "owners" {
+		f.ownersRoute(w, r, parts[3:])
+		return
+	}
+
+	// Expected property shapes:
 	//   crm/v3/properties/{objectType}
 	//   crm/v3/properties/{objectType}/{propertyName}
 	//   crm/v3/properties/{objectType}/groups
@@ -105,9 +140,6 @@ func (f *fakeHubSpot) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	objectType := parts[3]
 	rest := parts[4:]
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
 
 	switch {
 	case len(rest) == 1 && rest[0] == "groups" && r.Method == http.MethodPost:
@@ -261,6 +293,51 @@ func normalizeProperty(p *fakeProperty) {
 	if p.DisplayOrder == 0 {
 		p.DisplayOrder = -1
 	}
+}
+
+// accountInfo emulates GET /account-info/v3/details.
+func (f *fakeHubSpot) accountInfo(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeHubSpotError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", r.Method)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"portalId":            f.portalID,
+		"accountType":         "STANDARD",
+		"timeZone":            "US/Eastern",
+		"companyCurrency":     "USD",
+		"uiDomain":            "app.hubspot.com",
+		"dataHostingLocation": "na1",
+	})
+}
+
+// ownersRoute emulates GET /crm/v3/owners and /crm/v3/owners/{ownerId}.
+func (f *fakeHubSpot) ownersRoute(w http.ResponseWriter, r *http.Request, rest []string) {
+	if r.Method != http.MethodGet {
+		writeHubSpotError(w, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", r.Method)
+		return
+	}
+	// GET /crm/v3/owners/{ownerId}
+	if len(rest) == 1 {
+		for _, o := range f.owners {
+			if o.ID == rest[0] {
+				writeJSON(w, http.StatusOK, o)
+				return
+			}
+		}
+		writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "owner not found")
+		return
+	}
+	// GET /crm/v3/owners?email=
+	emailFilter := r.URL.Query().Get("email")
+	results := make([]*fakeOwner, 0, len(f.owners))
+	for _, o := range f.owners {
+		if emailFilter != "" && o.Email != emailFilter {
+			continue
+		}
+		results = append(results, o)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"results": results})
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
