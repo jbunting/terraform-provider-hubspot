@@ -39,17 +39,17 @@ jobs:
           - opentofu
     steps:
       # TODO: pin actions by commit SHA for supply-chain hardening.
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
           cache: true
       - if: matrix.tool == 'terraform'
-        uses: hashicorp/setup-terraform@v3
+        uses: hashicorp/setup-terraform@v4
         with:
           terraform_wrapper: false
       - if: matrix.tool == 'opentofu'
-        uses: opentofu/setup-opentofu@v1
+        uses: opentofu/setup-opentofu@v2
         with:
           tofu_wrapper: false
       - name: Resolve tofu binary path
@@ -79,8 +79,8 @@ jobs:
     timeout-minutes: 15
     steps:
       # TODO: pin actions by commit SHA for supply-chain hardening.
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: 'go.mod'
           cache: true
