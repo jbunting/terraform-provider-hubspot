@@ -1,0 +1,106 @@
+name: Bug report
+description: Report a reproducible problem with the provider
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to file a bug! Please search
+        [existing issues](https://github.com/revosai/terraform-provider-hubspot/issues)
+        first. For questions, use
+        [Discussions](https://github.com/revosai/terraform-provider-hubspot/discussions);
+        for security issues, see [SECURITY.md](https://github.com/revosai/terraform-provider-hubspot/blob/main/SECURITY.md).
+  - type: input
+    id: provider_version
+    attributes:
+      label: Provider version
+      description: The `revosai/hubspot` version (e.g. `0.1.0`).
+    validations:
+      required: true
+  - type: input
+    id: tf_version
+    attributes:
+      label: Terraform / OpenTofu version
+      description: Output of `terraform version` or `tofu version`.
+      placeholder: "Terraform v1.14.0 / OpenTofu v1.8.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: affected
+    attributes:
+      label: Affected resource or data source
+      options:
+        - Provider configuration / authentication
+        - hubspot_property
+        - hubspot_property_group
+        - hubspot_pipeline
+        - hubspot_object_schema
+        - hubspot_association_label
+        - hubspot_list
+        - data.hubspot_property / hubspot_properties
+        - data.hubspot_owner / hubspot_portal
+        - data.hubspot_pipeline / hubspot_object_schema / hubspot_association_labels
+        - Other / not sure
+    validations:
+      required: true
+  - type: dropdown
+    id: tier
+    attributes:
+      label: HubSpot subscription tier
+      description: Relevant because tier-gating (custom objects, multiple pipelines, association labels) surfaces as 403s.
+      options:
+        - Free
+        - Starter
+        - Professional
+        - Enterprise
+        - Not sure
+    validations:
+      required: false
+  - type: textarea
+    id: config
+    attributes:
+      label: Terraform configuration
+      description: Minimal HCL that reproduces the issue.
+      render: hcl
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: debug
+    attributes:
+      label: Debug output
+      description: |
+        `TF_LOG=DEBUG` output as a [Gist](https://gist.github.com) link.
+        **Redact `pat-…` tokens and any state — do not paste secrets.**
+    validations:
+      required: false
+  - type: textarea
+    id: panic
+    attributes:
+      label: Panic output
+      description: If Terraform/OpenTofu crashed, paste crash.log here.
+      render: shell
+    validations:
+      required: false
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I can reproduce this on the latest provider release.
+          required: true
+        - label: I redacted tokens and state from any logs above.
+          required: true

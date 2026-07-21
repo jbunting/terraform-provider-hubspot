@@ -1,0 +1,38 @@
+name: Feature request
+description: Suggest a new resource, data source, or enhancement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before filing, check the [ROADMAP](https://github.com/revosai/terraform-provider-hubspot/blob/main/ROADMAP.md)
+        and its out-of-scope table — many gaps exist because HubSpot has no
+        public API for the feature.
+  - type: textarea
+    id: usecase
+    attributes:
+      label: Use case
+      description: What are you trying to accomplish, and why?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed configuration
+      description: Sketch the HCL you'd like to write, if applicable.
+      render: hcl
+    validations:
+      required: false
+  - type: input
+    id: api
+    attributes:
+      label: Backing HubSpot API
+      description: Link to the HubSpot API docs that would back this, if known.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false

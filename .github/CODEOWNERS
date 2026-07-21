@@ -1,0 +1,9 @@
+# Code owners are requested for review automatically on matching paths.
+# See https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+* @zubairov
+
+# Release, CI, and supply-chain sensitive paths.
+/.github/         @zubairov
+/.goreleaser.yml  @zubairov
+/.golangci.yml    @zubairov

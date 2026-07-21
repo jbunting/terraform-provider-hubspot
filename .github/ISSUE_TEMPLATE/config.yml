@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or how-to
+    url: https://github.com/revosai/terraform-provider-hubspot/discussions
+    about: Ask usage questions in Discussions — please don't open an issue for these.
+  - name: Documentation (Terraform Registry)
+    url: https://registry.terraform.io/providers/revosai/hubspot/latest/docs
+    about: Resource, data-source, and guide reference.
+  - name: Report a security vulnerability
+    url: https://github.com/revosai/terraform-provider-hubspot/security/advisories/new
+    about: Report privately — never in a public issue.

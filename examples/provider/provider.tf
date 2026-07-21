@@ -1,12 +1,13 @@
 terraform {
   required_providers {
     hubspot = {
-      source = "revosai/hubspot"
+      source  = "revosai/hubspot"
+      version = "~> 0.1"
     }
   }
 }
 
 provider "hubspot" {
-  # The private app access token is read from the
+  # The service key or private app access token is read from the
   # HUBSPOT_ACCESS_TOKEN environment variable.
 }

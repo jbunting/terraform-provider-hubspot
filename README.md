@@ -1,5 +1,11 @@
 # Terraform Provider for HubSpot
 
+[![Terraform Registry](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fregistry.terraform.io%2Fv1%2Fproviders%2Frevosai%2Fhubspot&query=%24.version&label=terraform%20registry&color=7B42BC&logo=terraform)](https://registry.terraform.io/providers/revosai/hubspot/latest)
+[![Tests](https://github.com/revosai/terraform-provider-hubspot/actions/workflows/test.yml/badge.svg)](https://github.com/revosai/terraform-provider-hubspot/actions/workflows/test.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/revosai/terraform-provider-hubspot)](https://goreportcard.com/report/github.com/revosai/terraform-provider-hubspot)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/revosai/terraform-provider-hubspot)](https://go.dev/)
+[![License: MPL 2.0](https://img.shields.io/badge/license-MPL%202.0-blue.svg)](./LICENSE)
+
 Manage your HubSpot portal configuration as code. This provider targets the
 HubSpot **configuration plane** — the structural setup of your portal
 (properties, groups, pipelines, custom object schemas, association labels,
@@ -260,6 +266,13 @@ If an API exists and the resource just isn't built yet, it's on the
 **Terraform or OpenTofu?**
 Both, as equals. The same binary serves both tools, CI runs the acceptance
 suite against both, and the provider will be published to both registries.
+
+## Support & security
+
+- **Questions / how-to:** [GitHub Discussions](https://github.com/revosai/terraform-provider-hubspot/discussions) — see [`SUPPORT.md`](./SUPPORT.md).
+- **Bugs & feature requests:** [open an issue](https://github.com/revosai/terraform-provider-hubspot/issues/new/choose).
+- **Security vulnerabilities:** report privately per [`SECURITY.md`](./SECURITY.md) — never in a public issue, and never paste `pat-…` tokens or state.
+- **Contributing:** see [`CONTRIBUTING.md`](./CONTRIBUTING.md) and the [Code of Conduct](./CODE_OF_CONDUCT.md).
 
 ## License
 

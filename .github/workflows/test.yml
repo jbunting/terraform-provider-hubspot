@@ -58,6 +58,12 @@ jobs:
         run: |
           git diff --compact-summary --exit-code || \
             (echo; echo "Unexpected difference in directories after code generation. Run 'make generate' command and commit."; exit 1)
+      - name: Validate generated docs
+        run: make validate-docs
+      - name: Check examples are formatted
+        run: make fmt-examples
+      - name: Spell-check docs and examples
+        run: make misspell
 
   # Run acceptance tests against Terraform CLI versions.
   # Acceptance tests are hermetic (fake API) — no credentials required.

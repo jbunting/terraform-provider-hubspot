@@ -1,6 +1,6 @@
 default: build
 
-.PHONY: build install lint generate fmt test testacc testacc-real sweep
+.PHONY: build install lint generate docs fmt fmt-examples misspell validate-docs docs-check test testacc testacc-real sweep
 
 build:
 	go build ./...
@@ -14,6 +14,24 @@ lint:
 # Generate documentation via tfplugindocs (see tools/tools.go).
 generate:
 	cd tools; go generate ./...
+
+# Alias for `generate` — regenerate the registry docs under docs/.
+docs: generate
+
+# Check that examples/ is canonically formatted (CI gate).
+fmt-examples:
+	terraform fmt -check -recursive examples/
+
+# Spell-check docs, examples, and top-level markdown (CI gate).
+misspell:
+	go run github.com/client9/misspell/cmd/misspell@v0.3.4 -error docs/ examples/ *.md
+
+# Validate the generated docs against tfplugindocs' registry rules (CI gate).
+validate-docs:
+	cd tools; go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs validate --provider-name hubspot --provider-dir ..
+
+# Aggregate documentation quality gate: regenerate + validate + fmt + spell.
+docs-check: generate validate-docs fmt-examples misspell
 
 fmt:
 	gofmt -s -w -e .

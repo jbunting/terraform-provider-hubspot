@@ -23,6 +23,7 @@ make test        # unit + hermetic acceptance tests, no credentials
 make lint        # golangci-lint
 make fmt         # gofmt
 make generate    # regenerate registry docs (tfplugindocs) — commit the diff
+make docs-check  # generate + validate-docs + fmt-examples + misspell (doc CI gate)
 make testacc     # full acceptance run (TF_ACC=1)
 
 # one resource's tests, fast loop:
