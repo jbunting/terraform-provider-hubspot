@@ -132,6 +132,7 @@ func (p *HubSpotProvider) Resources(_ context.Context) []func() resource.Resourc
 	return []func() resource.Resource{
 		NewPropertyGroupResource,
 		NewPropertyResource,
+		NewPipelineResource,
 	}
 }
 

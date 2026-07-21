@@ -20,11 +20,12 @@ trail.
 |---|---|---|---|
 | [`hubspot_property_group`](./docs/resources/property_group.md) | CRM property groups — the named sections that organize properties in the HubSpot UI | Deletes the group | `{object_type}/{name}` |
 | [`hubspot_property`](./docs/resources/property.md) | Custom CRM property definitions on any object type, including enumeration options (list order = display order) and all field types | **Archives** the property — HubSpot reserves the name for ~90 days ("name purgatory"); the provider reports an actionable error if you recreate the name too soon | `{object_type}/{name}` |
+| [`hubspot_pipeline`](./docs/resources/pipeline.md) | Deal, ticket, and custom-object pipelines with inline stages (matched by `stage_id`, so reorders/renames are in-place updates, not destroy-create) | Deletes the pipeline, guarded against orphaning records; the default pipeline is adopt-via-import only | `{object_type}/{pipeline_id}` |
 
-Both resources support the full lifecycle: create, in-place update, replace
-on immutable-field changes (planned at plan time via `RequiresReplace`, with
-data-loss warnings in the docs), drift detection (out-of-band deletions are
-re-created, out-of-band edits are corrected), and `terraform import`.
+All three resources support the full lifecycle: create, in-place update,
+replace on immutable-field changes (planned at plan time via `RequiresReplace`,
+with data-loss warnings in the docs), drift detection (out-of-band deletions
+are re-created, out-of-band edits are corrected), and `terraform import`.
 
 ### Data sources
 
@@ -66,8 +67,8 @@ reference in [`docs/`](./docs/) (rendered on the registries once published).
 
 The full public roadmap lives in [`ROADMAP.md`](./ROADMAP.md). In short:
 
-- **Next:** data sources (`hubspot_property`, `hubspot_owner`, `hubspot_portal`)
-- **Phase 2:** custom object schemas, pipelines (with inline stages), association labels
+- **Shipped:** properties, property groups, pipelines; data sources for property, owner, and portal
+- **Next (rest of Phase 2):** custom object schemas, association labels
 - **Phase 3:** lists, public-app webhooks
 - **Phase 4:** workflows as code (Automation v4 beta API)
 - **Phase 5:** users, `hubspot_crm_record` fixture escape hatch
@@ -123,6 +124,8 @@ object type**:
 | Company properties/groups | `crm.schemas.companies.read`, `crm.schemas.companies.write` |
 | Deal properties/groups | `crm.schemas.deals.read`, `crm.schemas.deals.write` |
 | Custom-object properties/groups | `crm.schemas.custom.read`, `crm.schemas.custom.write` |
+| Deal/ticket pipelines | `crm.pipelines.write` (+ `crm.objects.deals.write` / `crm.objects.tickets.write`) |
+| Owners / portal data sources | `crm.objects.owners.read` (owners); no scope needed for portal |
 
 The provider never requests or uses CRM **record** scopes
 (`crm.objects.*`) — it cannot read or modify your contacts, companies, or

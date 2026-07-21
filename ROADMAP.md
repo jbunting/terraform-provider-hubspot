@@ -48,18 +48,18 @@ Planned improvements:
    ephemeral-resource support (short-lived credential handling).
 4. Re-evaluate defaults at service-key GA.
 
-`data.hubspot_property`, `data.hubspot_properties`, `data.hubspot_owner`,
-`data.hubspot_portal` — read-only glue that lets configurations reference
-HubSpot-defined and unmanaged objects.
+Remaining data source: `data.hubspot_properties` (the list source; the
+singular `hubspot_property`, `hubspot_owner`, and `hubspot_portal` sources
+already shipped above).
 
 ### Phase 2 — schema plane complete (v0.3)
 
-| Resource | Backing API |
-|---|---|
-| `hubspot_object_schema` (custom objects) | Schemas v3 (Enterprise) |
-| `hubspot_pipeline` (deals/tickets/custom, stages inline) | Pipelines v3 |
-| `hubspot_association_label` | Associations v4 |
-| Data sources: pipeline, object schema, association labels | — |
+| Resource | Backing API | Status |
+|---|---|---|
+| `hubspot_pipeline` (deals/tickets/custom, stages inline) | Pipelines v3 | ✅ shipped |
+| `hubspot_object_schema` (custom objects) | Schemas v3 (Enterprise) | planned |
+| `hubspot_association_label` | Associations v4 | planned |
+| Data sources: pipeline, object schema, association labels | — | planned |
 
 ### Phase 3 — lists + webhooks (v0.5)
 
