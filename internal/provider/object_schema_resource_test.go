@@ -159,6 +159,69 @@ resource "hubspot_object_schema" "b" {
 	})
 }
 
+// HubSpot always indexes the primary display property for search, injecting
+// it into searchableProperties server-side. The provider must absorb that
+// injection: a config that never lists it (or lists other properties without
+// it) must apply consistently and re-plan empty — regression test for the
+// real-portal failure "searchable_properties: was null, but now
+// cty.SetVal([acc_name])".
+func TestAccObjectSchema_searchablePrimaryInjected(t *testing.T) {
+	_, srv := newFakeHubSpot(t)
+
+	cfg := func(searchableHCL string) string {
+		return providerConfig(srv.URL) + `
+resource "hubspot_object_schema" "b" {
+  name         = "boat"
+  force_delete = true
+  labels = { singular = "Boat", plural = "Boats" }
+  primary_display_property = "hull"
+  ` + searchableHCL + `
+  properties = [
+    { name = "hull", label = "Hull", type = "string", field_type = "text" },
+    { name = "berth", label = "Berth", type = "string", field_type = "text" },
+  ]
+}`
+	}
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			// searchable_properties unset: the server-injected primary lands in
+			// state as a computed value (apply must be consistent).
+			{
+				Config: cfg(""),
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("hubspot_object_schema.b",
+						tfjsonpath.New("searchable_properties"),
+						knownvalue.SetExact([]knownvalue.Check{knownvalue.StringExact("hull")})),
+				},
+			},
+			{
+				Config: cfg(""),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			// Explicit set that omits the primary: the injected entry is
+			// stripped so state round-trips the practitioner's value.
+			{
+				Config: cfg(`searchable_properties = ["berth"]`),
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("hubspot_object_schema.b",
+						tfjsonpath.New("searchable_properties"),
+						knownvalue.SetExact([]knownvalue.Check{knownvalue.StringExact("berth")})),
+				},
+			},
+			{
+				Config: cfg(`searchable_properties = ["berth"]`),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+		},
+	})
+}
+
 // Changing the immutable name plans as a replacement (RequiresReplace).
 func TestAccObjectSchema_nameRequiresReplace(t *testing.T) {
 	_, srv := newFakeHubSpot(t)

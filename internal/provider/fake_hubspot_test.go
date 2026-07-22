@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -575,8 +576,21 @@ func (f *fakeHubSpot) createSchema(w http.ResponseWriter, r *http.Request) {
 		Description:                in.Description,
 		Properties:                 in.Properties,
 	}
+	s.normalizeSearchable()
 	f.schemas[objectTypeID] = s
 	writeJSON(w, http.StatusCreated, s)
+}
+
+// normalizeSearchable emulates HubSpot always indexing the primary display
+// property for search: the server injects it into searchableProperties on
+// every create/update, whether or not the request listed it.
+func (s *fakeObjectSchema) normalizeSearchable() {
+	if s.PrimaryDisplayProperty == "" {
+		return
+	}
+	if !slices.Contains(s.SearchableProperties, s.PrimaryDisplayProperty) {
+		s.SearchableProperties = append(s.SearchableProperties, s.PrimaryDisplayProperty)
+	}
 }
 
 func (f *fakeHubSpot) schemaByType(w http.ResponseWriter, r *http.Request, ref string) {
@@ -623,6 +637,7 @@ func (f *fakeHubSpot) schemaByType(w http.ResponseWriter, r *http.Request, ref s
 		if patch.Description != nil {
 			s.Description = *patch.Description
 		}
+		s.normalizeSearchable()
 		writeJSON(w, http.StatusOK, s)
 	case http.MethodDelete:
 		if s == nil {

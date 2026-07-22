@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
@@ -17,6 +18,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -175,9 +177,14 @@ func (r *objectSchemaResource) Schema(_ context.Context, _ resource.SchemaReques
 				MarkdownDescription: "Internal names of properties that must be set on every record. Mutable.",
 			},
 			"searchable_properties": schema.SetAttribute{
-				Optional:            true,
-				ElementType:         types.StringType,
-				MarkdownDescription: "Internal names of properties indexed for search. Mutable.",
+				Optional:    true,
+				Computed:    true,
+				ElementType: types.StringType,
+				MarkdownDescription: "Internal names of properties indexed for search. Mutable. HubSpot always " +
+					"indexes `primary_display_property` and adds it to this set server-side; the provider absorbs " +
+					"that injection, so listing it here is optional. When unset, the attribute is computed from " +
+					"the API (the primary display property).",
+				PlanModifiers: []planmodifier.Set{setplanmodifier.UseStateForUnknown()},
 			},
 			"description": schema.StringAttribute{
 				Optional:            true,
@@ -505,7 +512,7 @@ func flattenSchema(ctx context.Context, api objectSchemaWire, m *objectSchemaRes
 	diags.Append(d...)
 	m.RequiredProperties, d = stringsToSet(ctx, api.RequiredProperties)
 	diags.Append(d...)
-	m.SearchableProperties, d = stringsToSet(ctx, api.SearchableProperties)
+	m.SearchableProperties, d = flattenSearchableProperties(ctx, api, m.SearchableProperties)
 	diags.Append(d...)
 
 	if api.Description == "" {
@@ -514,6 +521,39 @@ func flattenSchema(ctx context.Context, api objectSchemaWire, m *objectSchemaRes
 		m.Description = types.StringValue(api.Description)
 	}
 	return diags
+}
+
+// flattenSearchableProperties absorbs HubSpot's server-side injection of the
+// primary display property into searchableProperties (it is always indexed
+// for search) — decision #9: semantic, never raw, equality. When the prior
+// value (plan on create/update, state on read) is a known set that does not
+// list the primary display property, the injected entry is stripped so the
+// attribute round-trips the practitioner's value without an inconsistent
+// apply result or a perpetual diff. A null/unknown prior (unset config on
+// create, import) means the attribute is computed — keep the API truth.
+func flattenSearchableProperties(ctx context.Context, api objectSchemaWire, prior types.Set) (types.Set, diag.Diagnostics) {
+	if prior.IsNull() || prior.IsUnknown() {
+		return stringsToSet(ctx, api.SearchableProperties)
+	}
+	var priorVals []string
+	diags := prior.ElementsAs(ctx, &priorVals, false)
+	if diags.HasError() {
+		return prior, diags
+	}
+	searchable := api.SearchableProperties
+	if !slices.Contains(priorVals, api.PrimaryDisplayProperty) {
+		searchable = slices.DeleteFunc(slices.Clone(searchable), func(s string) bool {
+			return s == api.PrimaryDisplayProperty
+		})
+	}
+	// Preserve an explicitly configured empty set: stringsToSet would map it
+	// to null and re-break plan/apply consistency.
+	if len(searchable) == 0 {
+		return types.SetValueMust(types.StringType, nil), diags
+	}
+	out, d := types.SetValueFrom(ctx, types.StringType, searchable)
+	diags.Append(d...)
+	return out, diags
 }
 
 func labelsToWire(ctx context.Context, o types.Object) (objectSchemaLabelsWire, diag.Diagnostics) {
