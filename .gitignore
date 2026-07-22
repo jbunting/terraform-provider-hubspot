@@ -28,3 +28,6 @@ crash.*.log
 
 # HubSpot config file
 hubspot.config.yml
+
+# Claude Code personal settings
+.claude/settings.local.json

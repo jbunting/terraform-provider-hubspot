@@ -417,7 +417,12 @@ func TestAccReal_objectSchemaLifecycle(t *testing.T) {
 }
 
 // checkRealObjectSchemaDestroyed asserts every hubspot_object_schema in state
-// (keyed by objectTypeId) 404s on the real API after destroy.
+// (keyed by objectTypeId) is gone from the real API after destroy. Destroy is
+// archive + purge, and the purge is eventually consistent server-side:
+// immediately after a successful destroy the GET may still return 200 with
+// archived=true, and once the purge lands the objectTypeId stops resolving
+// with a 400 rather than a 404. All of those count as destroyed; only a live
+// (unarchived) schema fails the check.
 func checkRealObjectSchemaDestroyed(s *terraform.State) error {
 	token := os.Getenv("HUBSPOT_ACCESS_TOKEN")
 	if token == "" {
@@ -427,16 +432,46 @@ func checkRealObjectSchemaDestroyed(s *terraform.State) error {
 		if rs.Type != "hubspot_object_schema" {
 			continue
 		}
-		status, err := realAPIStatus(token, "/crm/v3/schemas/"+rs.Primary.ID)
+		status, archived, err := realAPISchemaState(token, rs.Primary.ID)
 		if err != nil {
 			return fmt.Errorf("%s: checking destroy: %w", addr, err)
 		}
-		if status != http.StatusNotFound {
-			return fmt.Errorf("%s: object schema %s still exists after destroy (status %d)",
-				addr, rs.Primary.ID, status)
+		switch {
+		case status == http.StatusNotFound || status == http.StatusBadRequest:
+			// Gone (400 = purged objectTypeId no longer resolves).
+		case status == http.StatusOK && archived:
+			// Archived; the purge completes asynchronously server-side.
+		default:
+			return fmt.Errorf("%s: object schema %s still live after destroy (status %d, archived %t)",
+				addr, rs.Primary.ID, status, archived)
 		}
 	}
 	return nil
+}
+
+// realAPISchemaState GETs a schema by objectTypeId and reports the HTTP
+// status plus, on 200, whether the schema is archived.
+func realAPISchemaState(token, objectTypeID string) (status int, archived bool, err error) {
+	req, err := http.NewRequest(http.MethodGet, realAPIBase+"/crm/v3/schemas/"+objectTypeID, nil)
+	if err != nil {
+		return 0, false, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := realHTTPClient.Do(req)
+	if err != nil {
+		return 0, false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return resp.StatusCode, false, nil
+	}
+	var body struct {
+		Archived bool `json:"archived"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return resp.StatusCode, false, fmt.Errorf("decoding GET /crm/v3/schemas/%s: %w", objectTypeID, err)
+	}
+	return resp.StatusCode, body.Archived, nil
 }
 
 // TestAccReal_propertiesDataSource lists contacts properties from the real
