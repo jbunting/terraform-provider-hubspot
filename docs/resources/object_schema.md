@@ -85,7 +85,7 @@ resource "hubspot_property" "color" {
 - `description` (String) Description of the object. Mutable.
 - `force_delete` (Boolean) Must be `true` to allow `terraform destroy` (or a `name`-change replacement) to delete this schema. Deleting a schema permanently removes the object type and all its records. Defaults to `false` as a safety guard.
 - `required_properties` (Set of String) Internal names of properties that must be set on every record. Mutable.
-- `searchable_properties` (Set of String) Internal names of properties indexed for search. Mutable.
+- `searchable_properties` (Set of String) Internal names of properties indexed for search. Mutable. HubSpot always indexes `primary_display_property` and adds it to this set server-side; the provider absorbs that injection, so listing it here is optional. When unset, the attribute is computed from the API (the primary display property).
 - `secondary_display_properties` (Set of String) Internal names of properties shown as secondary display labels. Mutable.
 
 ### Read-Only
