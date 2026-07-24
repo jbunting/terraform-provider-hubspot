@@ -222,6 +222,64 @@ resource "hubspot_object_schema" "b" {
 	})
 }
 
+// HubSpot serves schema GETs from a load-balanced cache whose nodes lag
+// writes: reads observed against the live portal flip-flop between the
+// current schema and a stale pre-write snapshot (after create, one with
+// primaryDisplayProperty defaulted to hs_object_id and no required
+// properties) for minutes. That made every refresh right after apply a coin
+// toss reporting spurious drift — the nightly TestAccReal_objectSchemaLifecycle
+// failure. The fake reproduces it by interleaving stale reads after every
+// schema write; the provider must absorb them across the whole lifecycle,
+// including import.
+func TestAccObjectSchema_staleReadCache(t *testing.T) {
+	f, srv := newFakeHubSpot(t)
+	f.schemaReadLag = 3
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: objectSchemaConfig(srv.URL, "Cars"),
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("hubspot_object_schema.car",
+						tfjsonpath.New("primary_display_property"), knownvalue.StringExact("model")),
+					statecheck.ExpectKnownValue("hubspot_object_schema.car",
+						tfjsonpath.New("required_properties"),
+						knownvalue.SetExact([]knownvalue.Check{knownvalue.StringExact("model")})),
+				},
+			},
+			{
+				Config: objectSchemaConfig(srv.URL, "Cars"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+			},
+			{
+				Config: objectSchemaConfig(srv.URL, "Automobiles"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction("hubspot_object_schema.car", plancheck.ResourceActionUpdate),
+					},
+				},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("hubspot_object_schema.car",
+						tfjsonpath.New("labels").AtMapKey("plural"), knownvalue.StringExact("Automobiles")),
+				},
+			},
+			// Import has no prior state to absorb stale reads against — the
+			// freshest sampled read (max updatedAt) must win over the stale
+			// generation still being served.
+			{
+				ResourceName:            "hubspot_object_schema.car",
+				ImportState:             true,
+				ImportStateId:           "2-1",
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"properties", "associated_objects", "force_delete"},
+			},
+		},
+	})
+}
+
 // Changing the immutable name plans as a replacement (RequiresReplace).
 func TestAccObjectSchema_nameRequiresReplace(t *testing.T) {
 	_, srv := newFakeHubSpot(t)

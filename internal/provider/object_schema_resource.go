@@ -5,10 +5,12 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -23,6 +25,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 
 	"github.com/revosai/terraform-provider-hubspot/internal/client"
 )
@@ -94,6 +97,9 @@ type objectSchemaWire struct {
 	Properties                 []schemaPropertyWire   `json:"properties,omitempty"`
 	AssociatedObjects          []string               `json:"associatedObjects,omitempty"`
 	Archived                   bool                   `json:"archived,omitempty"`
+	// UpdatedAt is read-only server metadata (RFC3339); never sent on writes.
+	// Reads use it to rank cache generations — see readSchemaConsistent.
+	UpdatedAt string `json:"updatedAt,omitempty"`
 }
 
 type objectSchemaLabelsWire struct {
@@ -313,7 +319,33 @@ func (r *objectSchemaResource) Create(ctx context.Context, req resource.CreateRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	// The 201 echoes primaryDisplayProperty/requiredProperties, but HubSpot
+	// applies them to the stored schema asynchronously (a few seconds after
+	// create — observed live). Wait until at least one read reflects the
+	// created state so the refresh that follows apply can find a consistent
+	// read; state is already plan-consistent either way.
+	r.awaitSchemaVisible(ctx, plan)
+
+	resp.Diagnostics.Append(stampSchemaLastWrite(ctx, resp.Private)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+// privateStateSetter is the slice of resource private state Create/Update
+// responses expose for stamping the last-write time.
+type privateStateSetter interface {
+	SetKey(ctx context.Context, key string, value []byte) diag.Diagnostics
+}
+
+// stampSchemaLastWrite records "now" in private state so Read can tell a
+// stale cache generation moments after our own write apart from genuine
+// out-of-band drift.
+func stampSchemaLastWrite(ctx context.Context, private privateStateSetter) diag.Diagnostics {
+	ts, err := json.Marshal(time.Now().UTC().Format(time.RFC3339))
+	if err != nil {
+		return nil // cannot happen for a string
+	}
+	return private.SetKey(ctx, schemaLastWriteKey, ts)
 }
 
 func (r *objectSchemaResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -323,21 +355,32 @@ func (r *objectSchemaResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 
-	p := "crm/v3/schemas/" + url.PathEscape(state.ObjectTypeID.ValueString())
-	var out objectSchemaWire
-	if err := r.client.Get(ctx, p, nil, &out); err != nil {
-		if client.IsNotFound(err) {
-			resp.State.RemoveResource(ctx)
-			return
+	recentWrite := false
+	if raw, d := req.Private.GetKey(ctx, schemaLastWriteKey); d == nil || !d.HasError() {
+		var ts string
+		if raw != nil && json.Unmarshal(raw, &ts) == nil {
+			if t, err := time.Parse(time.RFC3339, ts); err == nil {
+				recentWrite = time.Since(t) < schemaWriteGracePeriod
+			}
 		}
+	}
+
+	out, verdict, err := r.readSchemaConsistent(ctx, &state, recentWrite)
+	if err != nil {
 		resp.Diagnostics.AddError("Unable to read HubSpot object schema",
-			fmt.Sprintf("GET %s failed: %s", p, err))
+			fmt.Sprintf("GET crm/v3/schemas/%s failed: %s", state.ObjectTypeID.ValueString(), err))
 		return
 	}
-	// A soft-deleted (archived) schema is effectively gone from Terraform's
-	// perspective — treat it as removed so a destroy/re-create converges.
-	if out.Archived {
+	switch verdict {
+	case schemaReadGone:
+		// A missing or soft-deleted (archived) schema is effectively gone
+		// from Terraform's perspective — treat it as removed so a
+		// destroy/re-create converges.
 		resp.State.RemoveResource(ctx)
+		return
+	case schemaReadChurn:
+		// Reads are flip-flopping between cache generations; none of them is
+		// trustworthy. Keep the state Terraform last wrote.
 		return
 	}
 
@@ -346,6 +389,191 @@ func (r *objectSchemaResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// HubSpot's GET /crm/v3/schemas/{id} is served from a load-balanced cache
+// whose nodes hold different generations of the schema: reads observed
+// against the live API flip-flop between the current schema and stale
+// snapshots (often the just-created one, with primaryDisplayProperty
+// defaulted to hs_object_id and no required properties) for minutes after a
+// successful write — and stale generations carry a *bumped* updatedAt, so
+// recency metadata cannot rank them. Trusting a single read makes every
+// refresh a coin toss that reports spurious drift — decision #9 (semantic,
+// never raw, equality) extends to reads here.
+//
+// Possible future simplification: in the same probes, the schemas LIST
+// endpoint (GET /crm/v3/schemas) returned the post-write values in every
+// sample while by-id reads were still churning — if that holds up under a
+// longer observation, reading through the list would remove the need for
+// most of this machinery.
+const (
+	// schemaReadTimeout bounds how long a refresh keeps sampling reads while
+	// deciding between agreement, churn, and unanimous drift.
+	schemaReadTimeout = 30 * time.Second
+	// schemaReadInterval spaces the samples.
+	schemaReadInterval = time.Second
+	// schemaUnanimousReads is how many consecutive identical samples promote
+	// a disagreeing read to genuine out-of-band drift (or, on import, to the
+	// imported value).
+	schemaUnanimousReads = 5
+	// schemaWriteVisibleTimeout bounds how long Create/Update wait for their
+	// write to become visible to at least one read.
+	schemaWriteVisibleTimeout = 90 * time.Second
+	// schemaWriteGracePeriod is how long after our own write (stamped in
+	// resource private state) a disagreeing read is presumed to be cache lag
+	// rather than out-of-band drift. Stale generations were observed
+	// circulating for over a minute after a write.
+	schemaWriteGracePeriod = 10 * time.Minute
+	// schemaLastWriteKey is the private-state key holding the RFC3339
+	// timestamp of the provider's last write to this schema.
+	schemaLastWriteKey = "schema_last_write"
+)
+
+// schemaReadVerdict is readSchemaConsistent's outcome.
+type schemaReadVerdict int
+
+const (
+	schemaReadFresh schemaReadVerdict = iota // returned wire is authoritative
+	schemaReadGone                           // schema not found or archived
+	schemaReadChurn                          // reads flip-flopping; keep state
+)
+
+// readSchemaConsistent GETs the schema, absorbing stale cache generations:
+//
+//   - a read that agrees with state's mutable surface is authoritative
+//     (fresh node, no drift) and returned immediately;
+//   - within schemaWriteGracePeriod of our own write (recentWrite), any
+//     disagreeing read is presumed to be a stale cache generation — the
+//     write was already confirmed by its echo and awaitSchemaVisible — so
+//     the caller keeps state untouched (schemaReadChurn);
+//   - past the grace period, two samples that disagree with *each other*
+//     prove cache churn (a real out-of-band change settles on one value, it
+//     doesn't flip-flop) and state is kept; schemaUnanimousReads consecutive
+//     identical samples are genuine out-of-band drift and are returned;
+//   - with no prior state to agree with (import), sampling continues until a
+//     unanimous run appears (last sample on timeout, best effort);
+//   - schemaReadGone means not found or archived. A single gone read is
+//     trusted: schemas are only ever archived/purged deliberately, whereas a
+//     stale live read moments after a purge is routine — gone outranks live.
+func (r *objectSchemaResource) readSchemaConsistent(ctx context.Context, state *objectSchemaResourceModel, recentWrite bool) (objectSchemaWire, schemaReadVerdict, error) {
+	p := "crm/v3/schemas/" + url.PathEscape(state.ObjectTypeID.ValueString())
+	imported := state.PrimaryDisplayProperty.IsNull() && state.Labels.IsNull()
+
+	var prev objectSchemaWire
+	unanimous := 0
+	deadline := time.Now().Add(schemaReadTimeout)
+	for {
+		var out objectSchemaWire
+		if err := r.client.Get(ctx, p, nil, &out); err != nil {
+			if client.IsNotFound(err) {
+				return objectSchemaWire{}, schemaReadGone, nil
+			}
+			return objectSchemaWire{}, schemaReadFresh, err
+		}
+		if out.Archived {
+			return objectSchemaWire{}, schemaReadGone, nil
+		}
+		if !imported {
+			if r.schemaReadAgreesWithState(ctx, out, *state) {
+				return out, schemaReadFresh, nil
+			}
+			if recentWrite {
+				tflog.Info(ctx, "schema read disagrees moments after our own write; keeping state",
+					map[string]any{"path": p})
+				return objectSchemaWire{}, schemaReadChurn, nil
+			}
+		}
+		switch {
+		case unanimous == 0 || sameSchemaSurface(prev, out):
+			unanimous++
+		case imported:
+			unanimous = 1 // churn: restart the unanimity run on the new value
+		default:
+			tflog.Warn(ctx, "schema reads flip-flopping between cache generations; keeping state",
+				map[string]any{"path": p})
+			return objectSchemaWire{}, schemaReadChurn, nil
+		}
+		prev = out
+		if unanimous >= schemaUnanimousReads {
+			return out, schemaReadFresh, nil
+		}
+		// On deadline or cancellation, degrade to the last sample rather
+		// than failing: an import is best-effort against a churning cache.
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			tflog.Warn(ctx, "schema reads never became unanimous; using last sample",
+				map[string]any{"path": p})
+			return out, schemaReadFresh, nil //nolint:nilerr // degrade, don't fail
+		}
+		select {
+		case <-ctx.Done():
+			return out, schemaReadFresh, nil
+		case <-time.After(schemaReadInterval):
+		}
+	}
+}
+
+// sameSchemaSurface reports whether two reads carry the same mutable schema
+// surface — i.e. they are the same cache generation.
+func sameSchemaSurface(a, b objectSchemaWire) bool {
+	return a.Labels == b.Labels &&
+		a.PrimaryDisplayProperty == b.PrimaryDisplayProperty &&
+		a.Description == b.Description &&
+		sameStringSet(a.SecondaryDisplayProperties, b.SecondaryDisplayProperties) &&
+		sameStringSet(a.RequiredProperties, b.RequiredProperties) &&
+		sameStringSet(a.SearchableProperties, b.SearchableProperties)
+}
+
+// sameStringSet compares two string slices as unordered sets.
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	as, bs := slices.Clone(a), slices.Clone(b)
+	slices.Sort(as)
+	slices.Sort(bs)
+	return slices.Equal(as, bs)
+}
+
+// schemaReadAgreesWithState reports whether flattening api over state leaves
+// the mutable surface unchanged — i.e. the read reflects the state Terraform
+// last wrote, so it is not a stale cache generation.
+func (r *objectSchemaResource) schemaReadAgreesWithState(ctx context.Context, api objectSchemaWire, state objectSchemaResourceModel) bool {
+	candidate := state
+	if d := flattenSchema(ctx, api, &candidate); d.HasError() {
+		return false
+	}
+	return candidate.Labels.Equal(state.Labels) &&
+		candidate.PrimaryDisplayProperty.Equal(state.PrimaryDisplayProperty) &&
+		candidate.SecondaryDisplayProperties.Equal(state.SecondaryDisplayProperties) &&
+		candidate.RequiredProperties.Equal(state.RequiredProperties) &&
+		candidate.SearchableProperties.Equal(state.SearchableProperties) &&
+		candidate.Description.Equal(state.Description)
+}
+
+// awaitSchemaVisible polls GET until at least one read reflects the schema
+// state just written (HubSpot applies create-time display/required metadata
+// asynchronously). Best-effort: on timeout the caller proceeds with the
+// write echo and readSchemaConsistent absorbs the lag on later refreshes.
+func (r *objectSchemaResource) awaitSchemaVisible(ctx context.Context, written objectSchemaResourceModel) {
+	p := "crm/v3/schemas/" + url.PathEscape(written.ObjectTypeID.ValueString())
+	deadline := time.Now().Add(schemaWriteVisibleTimeout)
+	for {
+		var out objectSchemaWire
+		if err := r.client.Get(ctx, p, nil, &out); err == nil &&
+			r.schemaReadAgreesWithState(ctx, out, written) {
+			return
+		}
+		if time.Now().After(deadline) {
+			tflog.Warn(ctx, "schema write not yet visible to reads; proceeding with write echo",
+				map[string]any{"path": p})
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(schemaReadInterval):
+		}
+	}
 }
 
 func (r *objectSchemaResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -373,6 +601,13 @@ func (r *objectSchemaResource) Update(ctx context.Context, req resource.UpdateRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	// PATCHes propagate to reads with the same lag as creates (the new value
+	// was observed live to be absent from every read for 8+ seconds). Wait
+	// for one consistent read so follow-up refreshes and imports see it.
+	r.awaitSchemaVisible(ctx, plan)
+
+	resp.Diagnostics.Append(stampSchemaLastWrite(ctx, resp.Private)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
