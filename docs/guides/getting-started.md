@@ -79,6 +79,15 @@ terraform plan
 terraform apply
 ```
 
+The provider works identically under OpenTofu — substitute `tofu` for
+`terraform` throughout:
+
+```shell
+tofu init
+tofu plan
+tofu apply
+```
+
 `terraform plan` doubles as drift detection: run it any time to see
 configuration that has drifted from your portal. To stop managing an object
 without changing it in HubSpot, use `terraform state rm`.
@@ -87,4 +96,5 @@ without changing it in HubSpot, use `terraform state rm`.
 
 - [Authentication and scopes](authentication.md)
 - [Destroy and archive behavior](destroy-semantics.md)
+- [Promoting configuration from sandbox to production](sandbox-to-production.md)
 - Resource reference in the left navigation.

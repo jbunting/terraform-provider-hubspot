@@ -1,6 +1,6 @@
 default: build
 
-.PHONY: build install lint generate docs fmt fmt-examples misspell validate-docs docs-check test testacc testacc-real sweep
+.PHONY: build install lint generate docs fmt fmt-examples misspell validate-docs check-descriptions docs-check test testacc testacc-real sweep
 
 build:
 	go build ./...
@@ -30,8 +30,13 @@ misspell:
 validate-docs:
 	cd tools; go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs validate --provider-name hubspot --provider-dir ..
 
-# Aggregate documentation quality gate: regenerate + validate + fmt + spell.
-docs-check: generate validate-docs fmt-examples misspell
+# Assert every schema attribute carries a description (CI gate). Needs
+# terraform (or tofu via TF_BIN) and jq on PATH.
+check-descriptions:
+	./tools/check-schema-descriptions.sh
+
+# Aggregate documentation quality gate: regenerate + validate + fmt + spell + coverage.
+docs-check: generate validate-docs fmt-examples misspell check-descriptions
 
 fmt:
 	gofmt -s -w -e .

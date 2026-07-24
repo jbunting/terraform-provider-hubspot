@@ -61,6 +61,20 @@ scopes you actually use — HubSpot evaluates schema scopes **per object type**.
 | `data.hubspot_owner` | `crm.objects.owners.read` |
 | `data.hubspot_portal` | none |
 
+## Product-tier requirements
+
+Scopes are not the only gate: some surfaces also require a HubSpot product
+tier, and a token with the right scopes still gets a `403` on a portal whose
+subscription lacks the feature.
+
+| Surface | Account requirement | Quota notes |
+|---|---|---|
+| Custom properties (`hubspot_property`) | All tiers | Free portals are capped at 10 custom properties per object; paid tiers raise the cap. |
+| Custom object schemas (`hubspot_object_schema`) | **Enterprise** | The number of custom object *types* is capped per tier. |
+| Multiple pipelines per object (`hubspot_pipeline`) | **Professional/Enterprise** (Sales Hub for deals, Service Hub for tickets) | Pipeline count and 100-stages-per-pipeline caps vary by tier; every portal has one default pipeline on any tier. |
+| Custom association labels (`hubspot_association_label`) | **Professional/Enterprise** | Label count per object-type pair is capped per tier. |
+| API request volume (all resources) | All tiers | Free/Starter: 100 requests per 10s and 250,000/day; Pro/Enterprise raise both. The provider rate-limits itself and backs off on burst 429s, but fails fast when the daily quota is exhausted. |
+
 ## Interpreting 403 errors
 
 A `403` from HubSpot has three common causes, and the provider surfaces which
