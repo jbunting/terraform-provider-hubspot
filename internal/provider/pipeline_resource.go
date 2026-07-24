@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/url"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
@@ -176,7 +177,10 @@ func (r *pipelineResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 								"(`\"OPEN\"` or `\"CLOSED\"`). Values are strings to avoid float diffs. " +
 								"Only the keys you set are tracked; HubSpot-injected keys (such as " +
 								"`isClosed` on deal stages) are ignored, so they never cause a perpetual " +
-								"diff. An omitted `metadata` and `metadata = {}` are both valid and " +
+								"diff. Numeric values are compared semantically: HubSpot rewrites " +
+								"probabilities in canonical form (`\"0.10\"` becomes `\"0.1\"`) when a " +
+								"pipeline is saved from its UI, and formatting-only differences are not " +
+								"drift — your spelling is kept. An omitted `metadata` and `metadata = {}` are both valid and " +
 								"round-trip without drift.",
 						},
 						"id": schema.StringAttribute{
@@ -530,7 +534,9 @@ func expandPipeline(ctx context.Context, m pipelineResourceModel) (pipelineWire,
 // each stage we keep ONLY the keys the user manages — the keys present in the
 // corresponding stage's metadata in the prior model (the plan for
 // Create/Update, the state for Read) — while taking their VALUES from the
-// server response so server normalization of managed keys is still captured.
+// server response so server normalization of managed keys is still captured,
+// except that a numerically-equal value keeps the prior spelling (HubSpot
+// canonicalizes probability strings, "0.10" -> "0.1", on UI saves).
 // Server-injected keys are dropped. When there is no prior model (Import),
 // the full server map is stored best-effort; a first plan after import may
 // reconcile metadata against the user's config.
@@ -652,14 +658,29 @@ func reconcileStageMetadata(ctx context.Context, hasPrior bool, prior *pipelineS
 		return types.MapNull(types.StringType), diags
 	}
 
-	// Keep only managed keys, taking values from the server response.
+	// Keep only managed keys, taking values from the server response — except
+	// when the server value differs from the prior one only in numeric
+	// formatting. HubSpot rewrites deal stage probabilities in canonical form
+	// when a pipeline is saved from its UI ("0.10" becomes "0.1"); adopting
+	// that spelling would perpetually diff against the user's config (design
+	// decision #9: semantic equality). Genuinely different values still adopt
+	// the server value so real drift is detected.
 	managed := make(map[string]string, len(priorMeta))
 	for k := range priorMeta {
-		if v, ok := serverMeta[k]; ok {
+		if v, ok := serverMeta[k]; ok && !equalNumericStrings(priorMeta[k], v) {
 			managed[k] = v
 		} else {
 			managed[k] = priorMeta[k]
 		}
 	}
 	return types.MapValueFrom(ctx, types.StringType, managed)
+}
+
+// equalNumericStrings reports whether a and b are both decimal number strings
+// with the same numeric value ("0.10" and "0.1", "1.0" and "1"). Anything
+// non-numeric never matches: only formatting-only differences are equal.
+func equalNumericStrings(a, b string) bool {
+	fa, errA := strconv.ParseFloat(a, 64)
+	fb, errB := strconv.ParseFloat(b, 64)
+	return errA == nil && errB == nil && fa == fb
 }

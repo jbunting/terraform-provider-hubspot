@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+BUG FIXES:
+
+* `hubspot_pipeline`: absorb HubSpot's numeric canonicalization of stage metadata. Saving a pipeline from the HubSpot UI (e.g. changing a stage color) rewrites deal-stage probabilities in canonical form (`"0.10"` → `"0.1"`), which produced a perpetual formatting-only plan diff (`"0.1" -> "0.10"`). Metadata values that are numerically equal now keep the configured spelling; genuine value changes are still detected as drift ([#15](https://github.com/revosai/terraform-provider-hubspot/issues/15))
+
 ## 0.1.0 (July 24, 2026)
 
 BUG FIXES:
