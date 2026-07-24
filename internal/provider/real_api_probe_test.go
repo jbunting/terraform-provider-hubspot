@@ -92,6 +92,44 @@ func probeGetSeries(t *testing.T, label, objectTypeID string, offsets []time.Dur
 	}
 }
 
+// probeListSeries GETs the schemas LIST endpoint at increasing offsets and
+// logs our schema's entry — to learn whether the list is served from the
+// same stale cache as GET-by-id or is a consistent alternative read path.
+func probeListSeries(t *testing.T, label, objectTypeID string, offsets []time.Duration) {
+	t.Helper()
+	start := time.Now()
+	for _, off := range offsets {
+		if d := time.Until(start.Add(off)); d > 0 {
+			time.Sleep(d)
+		}
+		status, raw := probeDo(t, http.MethodGet, "/crm/v3/schemas", nil)
+		if status != http.StatusOK {
+			t.Logf("PROBE %s LIST +%v: %d %.300s", label, off, status, raw)
+			continue
+		}
+		var envelope struct {
+			Results []json.RawMessage `json:"results"`
+		}
+		if err := json.Unmarshal(raw, &envelope); err != nil {
+			t.Logf("PROBE %s LIST +%v: unparseable envelope: %v", label, off, err)
+			continue
+		}
+		found := false
+		for _, res := range envelope.Results {
+			var s probeSchema
+			if json.Unmarshal(res, &s) == nil && s.ObjectTypeID == objectTypeID {
+				t.Logf("PROBE %s LIST +%v: 200 %s", label, off, probeSummarize(res))
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Logf("PROBE %s LIST +%v: 200 schema %s ABSENT from list (%d results)",
+				label, off, objectTypeID, len(envelope.Results))
+		}
+	}
+}
+
 // TestAccReal_schemaProbe documents live /crm/v3/schemas behavior:
 //
 //  1. create with primaryDisplayProperty+requiredProperties set, then watch
@@ -134,6 +172,7 @@ func TestAccReal_schemaProbe(t *testing.T) {
 		0, 500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second,
 		8 * time.Second, 15 * time.Second, 30 * time.Second, 60 * time.Second,
 	})
+	probeListSeries(t, "post-create", id, []time.Duration{0, 2 * time.Second, 5 * time.Second})
 
 	// PATCH the same values in now that the schema has had 60s to settle.
 	patchBody := map[string]any{
@@ -148,6 +187,7 @@ func TestAccReal_schemaProbe(t *testing.T) {
 		0, 500 * time.Millisecond, time.Second, 2 * time.Second, 4 * time.Second,
 		8 * time.Second, 15 * time.Second, 30 * time.Second, 60 * time.Second,
 	})
+	probeListSeries(t, "post-patch", id, []time.Duration{0, 2 * time.Second, 5 * time.Second})
 
 	// A label-only PATCH (what lifecycle step 3 does) for comparison.
 	status, raw = probeDo(t, http.MethodPatch, "/crm/v3/schemas/"+id, map[string]any{

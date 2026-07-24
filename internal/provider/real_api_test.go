@@ -407,10 +407,22 @@ func TestAccReal_objectSchemaLifecycle(t *testing.T) {
 				},
 			},
 			{
-				ResourceName:            "hubspot_object_schema.test",
-				ImportState:             true,
-				ImportStateVerify:       true,
-				ImportStateVerifyIgnore: []string{"properties", "associated_objects", "force_delete"},
+				ResourceName:      "hubspot_object_schema.test",
+				ImportState:       true,
+				ImportStateVerify: true,
+				// properties/associated_objects/force_delete are create-time
+				// bootstrap fields not returned by the API. The mutable
+				// display surface is excluded because live schema reads are
+				// served from a cache that churns between generations for
+				// minutes after a write, so an import taken moments after
+				// the update step has no consistent value to verify against
+				// (full import verification runs hermetically in
+				// TestAccObjectSchema_lifecycle / _staleReadCache instead).
+				ImportStateVerifyIgnore: []string{
+					"properties", "associated_objects", "force_delete",
+					"labels", "primary_display_property", "required_properties",
+					"searchable_properties", "secondary_display_properties",
+				},
 			},
 		},
 	})
