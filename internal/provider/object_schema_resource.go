@@ -6,9 +6,11 @@ package provider
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -23,6 +25,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 
 	"github.com/revosai/terraform-provider-hubspot/internal/client"
 )
@@ -340,7 +343,8 @@ func (r *objectSchemaResource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 
-	resp.Diagnostics.Append(flattenSchema(ctx, patched, &plan)...)
+	settled := r.awaitSchemaConsistent(ctx, p, patched)
+	resp.Diagnostics.Append(flattenSchema(ctx, settled, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -400,7 +404,8 @@ func (r *objectSchemaResource) Update(ctx context.Context, req resource.UpdateRe
 		return
 	}
 
-	resp.Diagnostics.Append(flattenSchema(ctx, out, &plan)...)
+	settled := r.awaitSchemaConsistent(ctx, p, out)
+	resp.Diagnostics.Append(flattenSchema(ctx, settled, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -449,6 +454,95 @@ func (r *objectSchemaResource) Delete(ctx context.Context, req resource.DeleteRe
 			fmt.Sprintf("DELETE %s?archived=true failed: %s", base, err))
 		return
 	}
+
+	// Deletes are eventually consistent too: a GET moments after a successful
+	// archive + purge can still report the schema live (200, archived=false).
+	// Wait until the API reflects the deletion — archived counts (the purge
+	// completes asynchronously server-side), and a purged objectTypeId stops
+	// resolving with a 400 rather than a 404.
+	deadline := time.Now().Add(schemaConsistencyTimeout)
+	for attempt := 1; ; attempt++ {
+		var got objectSchemaWire
+		err := r.client.Get(ctx, base, nil, &got)
+		if err != nil {
+			var apiErr *client.APIError
+			if client.AsAPIError(err, &apiErr) &&
+				(apiErr.StatusCode == http.StatusNotFound || apiErr.StatusCode == http.StatusBadRequest) {
+				return // gone
+			}
+			// Transient read failure — keep polling until the deadline.
+		} else if got.Archived {
+			return
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			tflog.Warn(ctx, "HubSpot object schema still reads live after delete; giving up waiting",
+				map[string]any{"path": base})
+			return
+		}
+		time.Sleep(schemaConsistencyWait(attempt))
+	}
+}
+
+// schemaConsistencyTimeout bounds how long writes wait for HubSpot's
+// eventually consistent schema reads to reflect them.
+const schemaConsistencyTimeout = 30 * time.Second
+
+// schemaConsistencyWait ramps the poll interval: 500ms, 1s, 1.5s, then 2s.
+func schemaConsistencyWait(attempt int) time.Duration {
+	wait := time.Duration(attempt) * 500 * time.Millisecond
+	if wait > 2*time.Second {
+		wait = 2 * time.Second
+	}
+	return wait
+}
+
+// awaitSchemaConsistent polls GET p until the response reflects want — the
+// echo of a write that just succeeded. HubSpot's schema store is
+// read-after-write inconsistent: a GET moments after a successful POST/PATCH
+// can return stale data, which Terraform reports as spurious drift on the
+// refresh immediately following apply. Returns the first consistent read;
+// when the deadline passes, returns want so state carries the written values
+// and a later refresh converges.
+func (r *objectSchemaResource) awaitSchemaConsistent(ctx context.Context, p string, want objectSchemaWire) objectSchemaWire {
+	deadline := time.Now().Add(schemaConsistencyTimeout)
+	for attempt := 1; ; attempt++ {
+		var got objectSchemaWire
+		if err := r.client.Get(ctx, p, nil, &got); err == nil && schemaWriteSettled(want, got) {
+			return got
+		}
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			tflog.Warn(ctx, "HubSpot object schema read did not converge with write; keeping written values",
+				map[string]any{"path": p})
+			return want
+		}
+		select {
+		case <-ctx.Done():
+			return want
+		case <-time.After(schemaConsistencyWait(attempt)):
+		}
+	}
+}
+
+// schemaWriteSettled reports whether got (a fresh read) reflects want (a
+// write echo) across the mutable schema surface the provider manages.
+func schemaWriteSettled(want, got objectSchemaWire) bool {
+	return got.Labels == want.Labels &&
+		got.PrimaryDisplayProperty == want.PrimaryDisplayProperty &&
+		got.Description == want.Description &&
+		sameStringSet(got.SecondaryDisplayProperties, want.SecondaryDisplayProperties) &&
+		sameStringSet(got.RequiredProperties, want.RequiredProperties) &&
+		sameStringSet(got.SearchableProperties, want.SearchableProperties)
+}
+
+// sameStringSet compares two string slices as unordered sets.
+func sameStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	as, bs := slices.Clone(a), slices.Clone(b)
+	slices.Sort(as)
+	slices.Sort(bs)
+	return slices.Equal(as, bs)
 }
 
 func (r *objectSchemaResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {

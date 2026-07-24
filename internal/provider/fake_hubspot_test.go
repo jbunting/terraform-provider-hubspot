@@ -209,18 +209,32 @@ type fakeHubSpot struct {
 	labelCounter    int64
 	listCounter     int
 	lastPipelinePut string // raw query string of the most recent pipeline PUT
+
+	// schemaWriteLag emulates HubSpot's eventually consistent schema store:
+	// after each schema PATCH/DELETE, the next schemaWriteLag GETs observe
+	// the pre-write state instead of the write (0 = reads are consistent).
+	schemaWriteLag int
+	staleSchemas   map[string]*staleSchemaEntry // objectTypeId -> pre-write snapshot
+}
+
+// staleSchemaEntry is a pre-write snapshot served to GETs while a schema
+// write "replicates".
+type staleSchemaEntry struct {
+	snapshot *fakeObjectSchema
+	reads    int // stale GETs remaining
 }
 
 func newFakeHubSpot(t *testing.T) (*fakeHubSpot, *httptest.Server) {
 	t.Helper()
 	f := &fakeHubSpot{
-		groups:     map[string]map[string]*fakeGroup{},
-		properties: map[string]map[string]*fakeProperty{},
-		pipelines:  map[string]map[string]*fakePipeline{},
-		schemas:    map[string]*fakeObjectSchema{},
-		labels:     map[string][]*fakeAssocLabel{},
-		lists:      map[string]*fakeList{},
-		portalID:   123456,
+		groups:       map[string]map[string]*fakeGroup{},
+		properties:   map[string]map[string]*fakeProperty{},
+		pipelines:    map[string]map[string]*fakePipeline{},
+		schemas:      map[string]*fakeObjectSchema{},
+		labels:       map[string][]*fakeAssocLabel{},
+		lists:        map[string]*fakeList{},
+		staleSchemas: map[string]*staleSchemaEntry{},
+		portalID:     123456,
 	}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
@@ -602,10 +616,51 @@ func (s *fakeObjectSchema) normalizeSearchable() {
 	}
 }
 
+// snapshotSchema records a schema's current state so the next schemaWriteLag
+// GETs observe it instead of the write that is about to land — emulating the
+// real API's read-after-write inconsistency. The oldest pending snapshot wins,
+// so a rapid archive+purge pair keeps serving the pre-archive (live) state.
+func (f *fakeHubSpot) snapshotSchema(s *fakeObjectSchema) {
+	if f.schemaWriteLag <= 0 {
+		return
+	}
+	if _, ok := f.staleSchemas[s.ObjectTypeID]; ok {
+		return
+	}
+	c := *s
+	c.SecondaryDisplayProperties = slices.Clone(s.SecondaryDisplayProperties)
+	c.RequiredProperties = slices.Clone(s.RequiredProperties)
+	c.SearchableProperties = slices.Clone(s.SearchableProperties)
+	c.Properties = slices.Clone(s.Properties)
+	f.staleSchemas[s.ObjectTypeID] = &staleSchemaEntry{snapshot: &c, reads: f.schemaWriteLag}
+}
+
+// staleSchemaLookup resolves ref (objectTypeId, fullyQualifiedName, or name)
+// against pending pre-write snapshots.
+func (f *fakeHubSpot) staleSchemaLookup(ref string) *staleSchemaEntry {
+	if e, ok := f.staleSchemas[ref]; ok {
+		return e
+	}
+	for _, e := range f.staleSchemas {
+		if e.snapshot.FullyQualifiedName == ref || e.snapshot.Name == ref {
+			return e
+		}
+	}
+	return nil
+}
+
 func (f *fakeHubSpot) schemaByType(w http.ResponseWriter, r *http.Request, ref string) {
 	s := f.lookupSchema(ref)
 	switch r.Method {
 	case http.MethodGet:
+		if e := f.staleSchemaLookup(ref); e != nil {
+			e.reads--
+			if e.reads <= 0 {
+				delete(f.staleSchemas, e.snapshot.ObjectTypeID)
+			}
+			writeJSON(w, http.StatusOK, e.snapshot)
+			return
+		}
 		if s == nil {
 			writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "schema not found")
 			return
@@ -628,6 +683,7 @@ func (f *fakeHubSpot) schemaByType(w http.ResponseWriter, r *http.Request, ref s
 			writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid JSON")
 			return
 		}
+		f.snapshotSchema(s)
 		if patch.Labels != nil {
 			s.Labels = *patch.Labels
 		}
@@ -653,6 +709,7 @@ func (f *fakeHubSpot) schemaByType(w http.ResponseWriter, r *http.Request, ref s
 			writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "schema not found")
 			return
 		}
+		f.snapshotSchema(s)
 		if r.URL.Query().Get("archived") == "true" {
 			// Hard delete (purge). HubSpot only permits this once the schema is
 			// archived and holds zero records; the fake has no records.

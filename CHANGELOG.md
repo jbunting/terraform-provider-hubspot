@@ -22,6 +22,7 @@ FEATURES:
 BUG FIXES:
 
 * `hubspot_object_schema`: create now persists `primary_display_property` and `required_properties`. HubSpot's `POST /crm/v3/schemas` echoes both fields in the create response without storing them, so the first refresh after an apply reported spurious drift (`primary_display_property = "hs_object_id" -> ...`); the provider now re-asserts the mutable schema surface with a follow-up `PATCH` during create
+* `hubspot_object_schema`: absorb HubSpot's eventually consistent schema reads. A `GET` moments after a successful write can return stale data, which surfaced as spurious refresh drift right after create/update and as a "still live" read right after destroy; create, update, and delete now wait (up to 30s) for reads to reflect the write before returning
 
 NOTES:
 
