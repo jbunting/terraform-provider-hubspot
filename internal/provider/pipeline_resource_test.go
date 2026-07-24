@@ -384,6 +384,72 @@ func TestAccPipeline_addRemoveStage(t *testing.T) {
 	})
 }
 
+// TestAccPipeline_probabilityFormattingDrift is the regression test for the
+// spurious `"0.1" -> "0.10"` plan (issue #15): when a pipeline is saved from
+// the HubSpot UI (e.g. an admin changes a stage color), HubSpot rewrites deal
+// stage probabilities in canonical numeric form ("0.10" becomes "0.1"). A
+// config that spells the same number differently must not perpetually plan an
+// update — formatting-only drift is absorbed (design decision #9, semantic
+// equality) — while a genuine value change must still surface as drift.
+func TestAccPipeline_probabilityFormattingDrift(t *testing.T) {
+	f, srv := newFakeHubSpot(t)
+
+	stages := []stageCfg{
+		{label: "New", order: 0, meta: map[string]string{"probability": "0.10"}},
+		{label: "Won", order: 1, meta: map[string]string{"probability": "1.0"}},
+	}
+	cfg := pipelineConfig(srv.URL, "deals", "Formatting", stages)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: cfg,
+				ConfigStateChecks: []statecheck.StateCheck{
+					// State keeps the user's spelling of the probability.
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("stages").AtSliceIndex(0).AtMapKey("metadata").AtMapKey("probability"),
+						knownvalue.StringExact("0.10")),
+				},
+			},
+			{
+				// A HubSpot UI save rewrites "0.10" as "0.1": numerically the
+				// same value, so an identical config must plan empty.
+				PreConfig: func() {
+					f.setStageMetadata("deals", "pl_1", "stg_1", "probability", "0.1")
+				},
+				Config: cfg,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("stages").AtSliceIndex(0).AtMapKey("metadata").AtMapKey("probability"),
+						knownvalue.StringExact("0.10")),
+				},
+			},
+			{
+				// A genuine out-of-band probability change is real drift and
+				// must still be detected, not absorbed as formatting.
+				PreConfig: func() {
+					f.setStageMetadata("deals", "pl_1", "stg_1", "probability", "0.35")
+				},
+				RefreshState:       true,
+				ExpectNonEmptyPlan: true,
+			},
+			{
+				// Re-applying the config converges back to the configured value.
+				Config: cfg,
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("hubspot_pipeline.test",
+						tfjsonpath.New("stages").AtSliceIndex(0).AtMapKey("metadata").AtMapKey("probability"),
+						knownvalue.StringExact("0.10")),
+				},
+			},
+		},
+	})
+}
+
 // TestAccPipeline_ticketLifecycle covers a ticket pipeline: create with
 // ticketState metadata and prove the managed-keys reconciliation lets an
 // identical config plan empty (metadata round-trips with no perpetual diff).

@@ -303,6 +303,28 @@ func (f *fakeHubSpot) seedDefaultPipeline(objectType, id, label string, stages [
 	}
 }
 
+// setStageMetadata overwrites one metadata key of one stage out-of-band,
+// simulating an edit made in the HubSpot UI — e.g. a UI save rewriting a
+// probability in canonical numeric form ("0.10" -> "0.1"), or an admin
+// genuinely changing a stage's probability.
+func (f *fakeHubSpot) setStageMetadata(objectType, pipelineID, stageID, key, value string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	p := f.pipelines[objectType][pipelineID]
+	if p == nil {
+		return
+	}
+	for i := range p.Stages {
+		if p.Stages[i].ID != stageID {
+			continue
+		}
+		if p.Stages[i].Metadata == nil {
+			p.Stages[i].Metadata = map[string]string{}
+		}
+		p.Stages[i].Metadata[key] = value
+	}
+}
+
 // lastPipelinePutQuery returns the raw query string of the most recent pipeline
 // PUT, so update tests can assert the delete-guard params were transmitted.
 func (f *fakeHubSpot) lastPipelinePutQuery() string {
