@@ -400,6 +400,12 @@ func (r *objectSchemaResource) Read(ctx context.Context, req resource.ReadReques
 // recency metadata cannot rank them. Trusting a single read makes every
 // refresh a coin toss that reports spurious drift — decision #9 (semantic,
 // never raw, equality) extends to reads here.
+//
+// Possible future simplification: in the same probes, the schemas LIST
+// endpoint (GET /crm/v3/schemas) returned the post-write values in every
+// sample while by-id reads were still churning — if that holds up under a
+// longer observation, reading through the list would remove the need for
+// most of this machinery.
 const (
 	// schemaReadTimeout bounds how long a refresh keeps sampling reads while
 	// deciding between agreement, churn, and unanimous drift.
