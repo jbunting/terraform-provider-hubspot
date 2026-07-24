@@ -418,11 +418,12 @@ func TestAccReal_objectSchemaLifecycle(t *testing.T) {
 
 // checkRealObjectSchemaDestroyed asserts every hubspot_object_schema in state
 // (keyed by objectTypeId) is gone from the real API after destroy. Destroy is
-// archive + purge, and the purge is eventually consistent server-side:
-// immediately after a successful destroy the GET may still return 200 with
-// archived=true, and once the purge lands the objectTypeId stops resolving
-// with a 400 rather than a 404. All of those count as destroyed; only a live
-// (unarchived) schema fails the check.
+// archive + purge, but schema reads are served from a load-balanced cache
+// whose nodes lag writes by minutes: right after a successful purge, GETs
+// flip-flop between 400 (gone), 200 archived=true, and a stale 200 live
+// (observed against the live API). A single gone/archived read therefore
+// proves the destroy landed; only a schema that never reads as gone within
+// the polling window fails the check.
 func checkRealObjectSchemaDestroyed(s *terraform.State) error {
 	token := os.Getenv("HUBSPOT_ACCESS_TOKEN")
 	if token == "" {
@@ -432,18 +433,23 @@ func checkRealObjectSchemaDestroyed(s *terraform.State) error {
 		if rs.Type != "hubspot_object_schema" {
 			continue
 		}
-		status, archived, err := realAPISchemaState(token, rs.Primary.ID)
-		if err != nil {
-			return fmt.Errorf("%s: checking destroy: %w", addr, err)
-		}
-		switch {
-		case status == http.StatusNotFound || status == http.StatusBadRequest:
-			// Gone (400 = purged objectTypeId no longer resolves).
-		case status == http.StatusOK && archived:
-			// Archived; the purge completes asynchronously server-side.
-		default:
-			return fmt.Errorf("%s: object schema %s still live after destroy (status %d, archived %t)",
-				addr, rs.Primary.ID, status, archived)
+		deadline := time.Now().Add(90 * time.Second)
+		for {
+			status, archived, err := realAPISchemaState(token, rs.Primary.ID)
+			if err != nil {
+				return fmt.Errorf("%s: checking destroy: %w", addr, err)
+			}
+			// Gone: 400 = purged objectTypeId no longer resolves, 404 = not
+			// found, archived = soft-deleted with the purge still in flight.
+			if status == http.StatusNotFound || status == http.StatusBadRequest ||
+				(status == http.StatusOK && archived) {
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("%s: object schema %s still live after destroy (status %d, archived %t)",
+					addr, rs.Primary.ID, status, archived)
+			}
+			time.Sleep(2 * time.Second)
 		}
 	}
 	return nil

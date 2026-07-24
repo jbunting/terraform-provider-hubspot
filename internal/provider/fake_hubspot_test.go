@@ -117,6 +117,17 @@ type fakeObjectSchema struct {
 	Description                string               `json:"description,omitempty"`
 	Properties                 []fakeSchemaProperty `json:"properties"`
 	Archived                   bool                 `json:"archived"`
+	UpdatedAt                  string               `json:"updatedAt"`
+}
+
+// clone deep-copies a schema so a stale snapshot is immune to later writes.
+func (s *fakeObjectSchema) clone() *fakeObjectSchema {
+	c := *s
+	c.SecondaryDisplayProperties = slices.Clone(s.SecondaryDisplayProperties)
+	c.RequiredProperties = slices.Clone(s.RequiredProperties)
+	c.SearchableProperties = slices.Clone(s.SearchableProperties)
+	c.Properties = slices.Clone(s.Properties)
+	return &c
 }
 
 type fakeSchemaLabels struct {
@@ -209,18 +220,37 @@ type fakeHubSpot struct {
 	labelCounter    int64
 	listCounter     int
 	lastPipelinePut string // raw query string of the most recent pipeline PUT
+
+	// schemaReadLag emulates HubSpot's stale schema-read cache: after every
+	// schema write, GETs alternate between a pre-write snapshot and the
+	// current schema until schemaReadLag stale reads have been served
+	// (0 = reads are consistent). Creates snapshot the schema *without* its
+	// display/required metadata, mirroring HubSpot applying those
+	// asynchronously after POST.
+	schemaReadLag int
+	schemaStale   map[string]*fakeSchemaStale // objectTypeId -> stale generation
+	schemaWrites  int                         // monotonic updatedAt source
+}
+
+// fakeSchemaStale is a pre-write cache generation served interleaved with
+// fresh reads, mirroring the live API's load-balanced stale cache.
+type fakeSchemaStale struct {
+	snapshot *fakeObjectSchema
+	reads    int // stale reads remaining
+	served   int // reads since the write, to alternate stale/fresh
 }
 
 func newFakeHubSpot(t *testing.T) (*fakeHubSpot, *httptest.Server) {
 	t.Helper()
 	f := &fakeHubSpot{
-		groups:     map[string]map[string]*fakeGroup{},
-		properties: map[string]map[string]*fakeProperty{},
-		pipelines:  map[string]map[string]*fakePipeline{},
-		schemas:    map[string]*fakeObjectSchema{},
-		labels:     map[string][]*fakeAssocLabel{},
-		lists:      map[string]*fakeList{},
-		portalID:   123456,
+		groups:      map[string]map[string]*fakeGroup{},
+		properties:  map[string]map[string]*fakeProperty{},
+		pipelines:   map[string]map[string]*fakePipeline{},
+		schemas:     map[string]*fakeObjectSchema{},
+		labels:      map[string][]*fakeAssocLabel{},
+		lists:       map[string]*fakeList{},
+		schemaStale: map[string]*fakeSchemaStale{},
+		portalID:    123456,
 	}
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
@@ -577,8 +607,42 @@ func (f *fakeHubSpot) createSchema(w http.ResponseWriter, r *http.Request) {
 		Properties:                 in.Properties,
 	}
 	s.normalizeSearchable()
+	f.stampSchemaWrite(s)
 	f.schemas[objectTypeID] = s
+
+	// The live API applies primaryDisplayProperty/requiredProperties
+	// asynchronously after POST: stale cache generations serve the schema
+	// with those defaulted for a while. Stage that pre-metadata snapshot.
+	if f.schemaReadLag > 0 {
+		stale := s.clone()
+		stale.PrimaryDisplayProperty = "hs_object_id"
+		stale.RequiredProperties = nil
+		stale.SearchableProperties = []string{"hs_object_id"}
+		stale.UpdatedAt = "" // pre-write generation sorts older
+		f.schemaStale[objectTypeID] = &fakeSchemaStale{snapshot: stale, reads: f.schemaReadLag}
+	}
 	writeJSON(w, http.StatusCreated, s)
+}
+
+// stampSchemaWrite advances the schema's updatedAt; the counter keeps stamps
+// monotonic so fresher generations always compare greater.
+func (f *fakeHubSpot) stampSchemaWrite(s *fakeObjectSchema) {
+	f.schemaWrites++
+	s.UpdatedAt = fmt.Sprintf("2026-01-01T00:00:00.%09dZ", f.schemaWrites)
+}
+
+// stageStaleSchema snapshots the current schema as a stale cache generation
+// served interleaved with fresh reads for the next schemaReadLag stale GETs.
+// An already-pending older generation is kept (oldest wins, like a cache node
+// that missed several writes).
+func (f *fakeHubSpot) stageStaleSchema(s *fakeObjectSchema) {
+	if f.schemaReadLag <= 0 {
+		return
+	}
+	if _, ok := f.schemaStale[s.ObjectTypeID]; ok {
+		return
+	}
+	f.schemaStale[s.ObjectTypeID] = &fakeSchemaStale{snapshot: s.clone(), reads: f.schemaReadLag}
 }
 
 // normalizeSearchable emulates HubSpot always indexing the primary display
@@ -601,6 +665,20 @@ func (f *fakeHubSpot) schemaByType(w http.ResponseWriter, r *http.Request, ref s
 			writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "schema not found")
 			return
 		}
+		// Serve a pending stale generation on alternating reads, mirroring
+		// the live API's load-balanced cache (first read after a write is
+		// stale — observed live).
+		if e, ok := f.schemaStale[s.ObjectTypeID]; ok {
+			e.served++
+			if e.served%2 == 1 {
+				e.reads--
+				if e.reads <= 0 {
+					delete(f.schemaStale, s.ObjectTypeID)
+				}
+				writeJSON(w, http.StatusOK, e.snapshot)
+				return
+			}
+		}
 		writeJSON(w, http.StatusOK, s)
 	case http.MethodPatch:
 		if s == nil {
@@ -619,6 +697,7 @@ func (f *fakeHubSpot) schemaByType(w http.ResponseWriter, r *http.Request, ref s
 			writeHubSpotError(w, http.StatusBadRequest, "VALIDATION_ERROR", "invalid JSON")
 			return
 		}
+		f.stageStaleSchema(s)
 		if patch.Labels != nil {
 			s.Labels = *patch.Labels
 		}
@@ -638,6 +717,7 @@ func (f *fakeHubSpot) schemaByType(w http.ResponseWriter, r *http.Request, ref s
 			s.Description = *patch.Description
 		}
 		s.normalizeSearchable()
+		f.stampSchemaWrite(s)
 		writeJSON(w, http.StatusOK, s)
 	case http.MethodDelete:
 		if s == nil {
@@ -648,8 +728,11 @@ func (f *fakeHubSpot) schemaByType(w http.ResponseWriter, r *http.Request, ref s
 			// Hard delete (purge). HubSpot only permits this once the schema is
 			// archived and holds zero records; the fake has no records.
 			delete(f.schemas, s.ObjectTypeID)
+			delete(f.schemaStale, s.ObjectTypeID)
 		} else {
+			f.stageStaleSchema(s)
 			s.Archived = true // soft delete
+			f.stampSchemaWrite(s)
 		}
 		w.WriteHeader(http.StatusNoContent)
 	default:

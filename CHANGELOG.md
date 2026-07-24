@@ -2,6 +2,10 @@
 
 ## 0.1.0 (Unreleased)
 
+BUG FIXES:
+
+* `hubspot_object_schema`: absorb HubSpot's stale schema-read cache. `GET /crm/v3/schemas/{id}` is served from a load-balanced cache whose nodes lag writes by minutes, so single reads flip-flop between the current schema and a pre-write snapshot (e.g. `primary_display_property` reverting to `hs_object_id` right after create). Reads now re-sample until one agrees with the last-written state (genuine out-of-band drift is still reported from the freshest read), creates/updates wait until the write is visible, and imports keep the freshest of several sampled reads.
+
 FEATURES:
 
 * **New Provider:** `hubspot` — manage HubSpot portal configuration (config plane, not CRM records) as code

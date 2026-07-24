@@ -27,6 +27,7 @@ type probeSchema struct {
 	RequiredProperties     []string `json:"requiredProperties"`
 	SearchableProperties   []string `json:"searchableProperties"`
 	Archived               bool     `json:"archived"`
+	UpdatedAt              string   `json:"updatedAt"`
 	Labels                 struct {
 		Singular string `json:"singular"`
 		Plural   string `json:"plural"`
@@ -69,9 +70,9 @@ func probeSummarize(raw []byte) string {
 	if err := json.Unmarshal(raw, &s); err != nil {
 		return fmt.Sprintf("unparseable: %.300s", raw)
 	}
-	return fmt.Sprintf("id=%s primaryDisplay=%q required=%v searchable=%v archived=%t labels=%s/%s",
+	return fmt.Sprintf("id=%s primaryDisplay=%q required=%v searchable=%v archived=%t labels=%s/%s updatedAt=%s",
 		s.ObjectTypeID, s.PrimaryDisplayProperty, s.RequiredProperties, s.SearchableProperties,
-		s.Archived, s.Labels.Singular, s.Labels.Plural)
+		s.Archived, s.Labels.Singular, s.Labels.Plural, s.UpdatedAt)
 }
 
 // probeGetSeries GETs the schema at increasing offsets and logs each read.

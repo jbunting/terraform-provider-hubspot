@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/attr"
@@ -23,6 +24,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 
 	"github.com/revosai/terraform-provider-hubspot/internal/client"
 )
@@ -94,6 +96,9 @@ type objectSchemaWire struct {
 	Properties                 []schemaPropertyWire   `json:"properties,omitempty"`
 	AssociatedObjects          []string               `json:"associatedObjects,omitempty"`
 	Archived                   bool                   `json:"archived,omitempty"`
+	// UpdatedAt is read-only server metadata (RFC3339); never sent on writes.
+	// Reads use it to rank cache generations — see readSchemaConsistent.
+	UpdatedAt string `json:"updatedAt,omitempty"`
 }
 
 type objectSchemaLabelsWire struct {
@@ -313,6 +318,14 @@ func (r *objectSchemaResource) Create(ctx context.Context, req resource.CreateRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	// The 201 echoes primaryDisplayProperty/requiredProperties, but HubSpot
+	// applies them to the stored schema asynchronously (a few seconds after
+	// create — observed live). Wait until at least one read reflects the
+	// created state so the refresh that follows apply can find a consistent
+	// read; state is already plan-consistent either way.
+	r.awaitSchemaVisible(ctx, plan)
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -323,20 +336,16 @@ func (r *objectSchemaResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 
-	p := "crm/v3/schemas/" + url.PathEscape(state.ObjectTypeID.ValueString())
-	var out objectSchemaWire
-	if err := r.client.Get(ctx, p, nil, &out); err != nil {
-		if client.IsNotFound(err) {
-			resp.State.RemoveResource(ctx)
-			return
-		}
+	out, gone, err := r.readSchemaConsistent(ctx, &state)
+	if err != nil {
 		resp.Diagnostics.AddError("Unable to read HubSpot object schema",
-			fmt.Sprintf("GET %s failed: %s", p, err))
+			fmt.Sprintf("GET crm/v3/schemas/%s failed: %s", state.ObjectTypeID.ValueString(), err))
 		return
 	}
-	// A soft-deleted (archived) schema is effectively gone from Terraform's
-	// perspective — treat it as removed so a destroy/re-create converges.
-	if out.Archived {
+	// A missing or soft-deleted (archived) schema is effectively gone from
+	// Terraform's perspective — treat it as removed so a destroy/re-create
+	// converges.
+	if gone {
 		resp.State.RemoveResource(ctx)
 		return
 	}
@@ -346,6 +355,120 @@ func (r *objectSchemaResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
+}
+
+// HubSpot's GET /crm/v3/schemas/{id} is served from a load-balanced cache
+// whose nodes hold different generations of the schema: reads observed
+// against the live API flip-flop between the current schema and a stale
+// snapshot (often the just-created one, with primaryDisplayProperty
+// defaulted to hs_object_id and no required properties) for minutes after a
+// successful write. Trusting a single read makes every refresh a coin toss
+// that reports spurious drift — decision #9 (semantic, never raw, equality)
+// extends to reads here.
+const (
+	// schemaReadTimeout bounds how long a refresh keeps sampling reads while
+	// looking for one that agrees with the last-written state.
+	schemaReadTimeout = 45 * time.Second
+	// schemaReadInterval spaces the samples.
+	schemaReadInterval = time.Second
+	// schemaImportReads is the sample size when there is no prior state to
+	// agree with (import): the freshest read (max updatedAt) wins.
+	schemaImportReads = 6
+)
+
+// readSchemaConsistent GETs the schema, absorbing stale cache generations:
+//
+//   - a read that agrees with state's mutable surface is authoritative
+//     (fresh node, no drift) and returned immediately;
+//   - disagreeing reads are re-sampled until schemaReadTimeout; if none ever
+//     agrees, the schema really changed out of band and the freshest sample
+//     (max updatedAt — cache generations carry their write timestamp) is
+//     returned so the drift Terraform reports is at least the newest one;
+//   - with no prior state to agree with (import), schemaImportReads samples
+//     are taken and the freshest wins;
+//   - gone=true means not found or archived. A single gone read is trusted:
+//     schemas are only ever archived/purged deliberately, whereas a live
+//     stale read moments after a purge is routine — so gone outranks live.
+func (r *objectSchemaResource) readSchemaConsistent(ctx context.Context, state *objectSchemaResourceModel) (objectSchemaWire, bool, error) {
+	p := "crm/v3/schemas/" + url.PathEscape(state.ObjectTypeID.ValueString())
+	imported := state.PrimaryDisplayProperty.IsNull() && state.Labels.IsNull()
+
+	var freshest objectSchemaWire
+	haveFreshest := false
+	deadline := time.Now().Add(schemaReadTimeout)
+	for reads := 1; ; reads++ {
+		var out objectSchemaWire
+		if err := r.client.Get(ctx, p, nil, &out); err != nil {
+			if client.IsNotFound(err) {
+				return objectSchemaWire{}, true, nil
+			}
+			return objectSchemaWire{}, false, err
+		}
+		if out.Archived {
+			return objectSchemaWire{}, true, nil
+		}
+		if !haveFreshest || out.UpdatedAt > freshest.UpdatedAt {
+			freshest, haveFreshest = out, true
+		}
+		if !imported && r.schemaReadAgreesWithState(ctx, out, *state) {
+			return out, false, nil
+		}
+		if imported && reads >= schemaImportReads {
+			return freshest, false, nil
+		}
+		if !imported && time.Now().After(deadline) {
+			tflog.Warn(ctx, "no schema read converged with state; reporting freshest read as drift",
+				map[string]any{"path": p, "reads": reads})
+			return freshest, false, nil
+		}
+		select {
+		case <-ctx.Done():
+			return freshest, false, nil
+		case <-time.After(schemaReadInterval):
+		}
+	}
+}
+
+// schemaReadAgreesWithState reports whether flattening api over state leaves
+// the mutable surface unchanged — i.e. the read reflects the state Terraform
+// last wrote, so it is not a stale cache generation.
+func (r *objectSchemaResource) schemaReadAgreesWithState(ctx context.Context, api objectSchemaWire, state objectSchemaResourceModel) bool {
+	candidate := state
+	if d := flattenSchema(ctx, api, &candidate); d.HasError() {
+		return false
+	}
+	return candidate.Labels.Equal(state.Labels) &&
+		candidate.PrimaryDisplayProperty.Equal(state.PrimaryDisplayProperty) &&
+		candidate.SecondaryDisplayProperties.Equal(state.SecondaryDisplayProperties) &&
+		candidate.RequiredProperties.Equal(state.RequiredProperties) &&
+		candidate.SearchableProperties.Equal(state.SearchableProperties) &&
+		candidate.Description.Equal(state.Description)
+}
+
+// awaitSchemaVisible polls GET until at least one read reflects the schema
+// state just written (HubSpot applies create-time display/required metadata
+// asynchronously). Best-effort: on timeout the caller proceeds with the
+// write echo and readSchemaConsistent absorbs the lag on later refreshes.
+func (r *objectSchemaResource) awaitSchemaVisible(ctx context.Context, written objectSchemaResourceModel) {
+	p := "crm/v3/schemas/" + url.PathEscape(written.ObjectTypeID.ValueString())
+	deadline := time.Now().Add(schemaReadTimeout)
+	for {
+		var out objectSchemaWire
+		if err := r.client.Get(ctx, p, nil, &out); err == nil &&
+			r.schemaReadAgreesWithState(ctx, out, written) {
+			return
+		}
+		if time.Now().After(deadline) {
+			tflog.Warn(ctx, "schema write not yet visible to reads; proceeding with write echo",
+				map[string]any{"path": p})
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(schemaReadInterval):
+		}
+	}
 }
 
 func (r *objectSchemaResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
@@ -373,6 +496,12 @@ func (r *objectSchemaResource) Update(ctx context.Context, req resource.UpdateRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
+
+	// PATCHes propagate to reads with the same lag as creates (the new value
+	// was observed live to be absent from every read for 8+ seconds). Wait
+	// for one consistent read so follow-up refreshes and imports see it.
+	r.awaitSchemaVisible(ctx, plan)
+
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
