@@ -19,6 +19,10 @@ FEATURES:
 * **New Data Source:** `hubspot_object_schema` — resolve a custom object's portal-specific `object_type_id` by name
 * **New Data Source:** `hubspot_association_labels` — list association labels between an object-type pair (resolve portal-specific `type_id`s by name)
 
+BUG FIXES:
+
+* `hubspot_object_schema`: create now persists `primary_display_property` and `required_properties`. HubSpot's `POST /crm/v3/schemas` echoes both fields in the create response without storing them, so the first refresh after an apply reported spurious drift (`primary_display_property = "hs_object_id" -> ...`); the provider now re-asserts the mutable schema surface with a follow-up `PATCH` during create
+
 NOTES:
 
 * Documentation & repository hygiene: registry guides (authentication/scopes, getting-started, destroy semantics), import examples for all resources, README badges, and community-health files (`CODE_OF_CONDUCT.md`, `SECURITY.md`, `SUPPORT.md`, `RELEASING.md`, issue/PR templates, `CODEOWNERS`, Dependabot). CI now validates and spell-checks generated docs.

@@ -578,7 +578,16 @@ func (f *fakeHubSpot) createSchema(w http.ResponseWriter, r *http.Request) {
 	}
 	s.normalizeSearchable()
 	f.schemas[objectTypeID] = s
-	writeJSON(w, http.StatusCreated, s)
+
+	// Real HubSpot echoes the requested primaryDisplayProperty and
+	// requiredProperties in the 201 body but does NOT persist them: the
+	// stored schema comes back from GET with primaryDisplayProperty
+	// defaulted to hs_object_id and no required properties (observed against
+	// the live API; the provider re-asserts both with a follow-up PATCH).
+	echo := *s
+	s.PrimaryDisplayProperty = "hs_object_id"
+	s.RequiredProperties = nil
+	writeJSON(w, http.StatusCreated, &echo)
 }
 
 // normalizeSearchable emulates HubSpot always indexing the primary display

@@ -309,7 +309,38 @@ func (r *objectSchemaResource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 
-	resp.Diagnostics.Append(flattenSchema(ctx, out, &plan)...)
+	// HubSpot's create endpoint echoes primaryDisplayProperty and
+	// requiredProperties in the 201 response without persisting them: the
+	// stored schema comes back from GET with primaryDisplayProperty defaulted
+	// to hs_object_id and no required properties. Re-assert the mutable
+	// surface with the same PATCH the Update path uses so the stored schema
+	// matches the plan instead of drifting on the first refresh.
+	patchBody, d := expandSchemaPatch(ctx, plan)
+	resp.Diagnostics.Append(d...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	// searchable_properties is unknown (computed) when unset in config; round-
+	// trip the server-normalized value from the create response rather than
+	// sending null.
+	if plan.SearchableProperties.IsUnknown() {
+		patchBody.SearchableProperties = out.SearchableProperties
+	}
+	p := "crm/v3/schemas/" + url.PathEscape(out.ObjectTypeID)
+	var patched objectSchemaWire
+	if err := r.client.Patch(ctx, p, patchBody, &patched); err != nil {
+		// The schema exists — record it in state before erroring so it is
+		// managed (and the settle PATCH retried on the next apply) rather
+		// than leaked.
+		resp.Diagnostics.Append(flattenSchema(ctx, out, &plan)...)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+		resp.Diagnostics.AddError("Unable to finalize HubSpot object schema",
+			fmt.Sprintf("The schema was created, but the follow-up PATCH %s (which persists "+
+				"primary_display_property and required_properties) failed: %s", p, err))
+		return
+	}
+
+	resp.Diagnostics.Append(flattenSchema(ctx, patched, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
