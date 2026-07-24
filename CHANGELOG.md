@@ -22,3 +22,4 @@ FEATURES:
 NOTES:
 
 * Documentation & repository hygiene: registry guides (authentication/scopes, getting-started, destroy semantics), import examples for all resources, README badges, and community-health files (`CODE_OF_CONDUCT.md`, `SECURITY.md`, `SUPPORT.md`, `RELEASING.md`, issue/PR templates, `CODEOWNERS`, Dependabot). CI now validates and spell-checks generated docs.
+* Documentation: new sandbox→production promotion guide (workspaces/aliases, portal-specific ID rules, portal guard); product-tier requirements table in the authentication guide; env-var table on the provider index; import examples and getting-started now show OpenTofu (`tofu`) alongside Terraform. CI gains a schema description-coverage gate (`make check-descriptions`).

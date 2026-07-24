@@ -19,6 +19,10 @@ credential only the configuration scopes it needs
 (for example `crm.schemas.*`) — the provider never requests CRM record scopes,
 keeping your token least-privilege.
 
+The provider works identically with [OpenTofu](https://opentofu.org) and is
+published to both the Terraform Registry and the OpenTofu Registry —
+substitute `tofu` for `terraform` in any command shown in these docs.
+
 ## Example Usage
 
 {{tffile "examples/provider/provider.tf"}}
@@ -38,8 +42,16 @@ A token set explicitly in the provider configuration takes precedence over
 the environment variable. Prefer the environment variable to keep credentials
 out of your configuration files and state.
 
+Every provider argument can be supplied through the environment:
+
+| Provider argument | Environment variable | Default |
+|---|---|---|
+| `access_token` | `HUBSPOT_ACCESS_TOKEN` | (required, no default) |
+| `base_url` | `HUBSPOT_BASE_URL` | `https://api.hubapi.com` |
+
 See the [Authentication and scopes](guides/authentication.md) guide for the
-service-key vs. private-app details and the per-resource scope matrix.
+service-key vs. private-app details, the per-resource scope matrix, and the
+product-tier requirements.
 
 ### Terraform state and least privilege
 

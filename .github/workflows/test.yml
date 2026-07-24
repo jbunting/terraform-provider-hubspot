@@ -64,6 +64,8 @@ jobs:
         run: make fmt-examples
       - name: Spell-check docs and examples
         run: make misspell
+      - name: Check schema description coverage
+        run: make check-descriptions
 
   # Run acceptance tests against Terraform CLI versions.
   # Acceptance tests are hermetic (fake API) — no credentials required.

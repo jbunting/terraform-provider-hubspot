@@ -81,4 +81,7 @@ The [`terraform import` command](https://developer.hashicorp.com/terraform/cli/c
 # label's `name`, so it is not populated on import — set it in configuration
 # afterwards (it is immutable and only used at creation).
 terraform import hubspot_association_label.decision_maker 'contacts/companies/145'
+
+# OpenTofu uses the same ID (quote the composite ID here too):
+tofu import hubspot_association_label.decision_maker 'contacts/companies/145'
 ```

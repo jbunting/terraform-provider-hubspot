@@ -23,7 +23,8 @@ make test        # unit + hermetic acceptance tests, no credentials
 make lint        # golangci-lint
 make fmt         # gofmt
 make generate    # regenerate registry docs (tfplugindocs) — commit the diff
-make docs-check  # generate + validate-docs + fmt-examples + misspell (doc CI gate)
+make docs-check  # generate + validate-docs + fmt-examples + misspell + check-descriptions (doc CI gate)
+make check-descriptions  # fail if any schema attribute lacks a MarkdownDescription (needs terraform + jq)
 make testacc     # full acceptance run (TF_ACC=1)
 
 # one resource's tests, fast loop:
@@ -34,7 +35,8 @@ TF_ACC_TERRAFORM_PATH=$(which terraform) go test ./internal/provider/ -run 'Test
 
 - Run `make fmt`, `make lint`, `make test`, and `make generate` (commit any docs diff) before opening a PR.
 - Add a CHANGELOG entry under `## X.Y.Z (Unreleased)` for operator-impacting changes only, prefixed with the resource name.
-- Every schema attribute needs a `MarkdownDescription` stating defaults, valid values, and replace semantics (plan modifiers are not rendered in docs — write them out).
+- Every schema attribute needs a `MarkdownDescription` stating defaults, valid values, and replace semantics (plan modifiers are not rendered in docs — write them out). CI enforces this via `make check-descriptions`.
+- Import examples (`examples/resources/hubspot_<name>/import.sh`) show both `terraform import` and `tofu import` — OpenTofu is a first-class target.
 - One resource per PR where possible.
 
 ## Design context
