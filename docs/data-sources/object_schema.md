@@ -41,6 +41,7 @@ resource "hubspot_pipeline" "car_lifecycle" {
 
 ### Read-Only
 
+- `associations` (Attributes List) Association definitions HubSpot lists on this schema, in both directions: one entry from this object to each associated type, and one back. Includes associations created with `associated_objects`, by other schemas, or in the HubSpot UI. Sorted by `from_object_type_id`, then `to_object_type_id`, then `id`. Filter on the object type IDs rather than indexing by position. (see [below for nested schema](#nestedatt--associations))
 - `description` (String) Description of the object schema.
 - `fully_qualified_name` (String) Fully qualified name (`p{portalId}_{name}`).
 - `id` (String) Identifier for the data source (the resolved `object_type_id`).
@@ -52,3 +53,13 @@ resource "hubspot_pipeline" "car_lifecycle" {
 - `required_properties` (List of String) Properties required when creating a record of this object.
 - `searchable_properties` (List of String) Properties indexed for search.
 - `secondary_display_properties` (List of String) Properties shown alongside the primary display property.
+
+<a id="nestedatt--associations"></a>
+### Nested Schema for `associations`
+
+Read-Only:
+
+- `from_object_type_id` (String) Object type ID the association points from.
+- `id` (String) Association type ID (portal-specific): the `associationTypeId` used by the Associations API to link records along this direction.
+- `name` (String) HubSpot's internal name for the association definition.
+- `to_object_type_id` (String) Object type ID the association points to.

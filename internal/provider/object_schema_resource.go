@@ -4,6 +4,7 @@
 package provider
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -19,6 +20,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/setplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -59,6 +61,7 @@ type objectSchemaResourceModel struct {
 	Description                types.String `tfsdk:"description"`
 	Properties                 types.List   `tfsdk:"properties"`
 	AssociatedObjects          types.Set    `tfsdk:"associated_objects"`
+	Associations               types.List   `tfsdk:"associations"`
 	ForceDelete                types.Bool   `tfsdk:"force_delete"`
 	ObjectTypeID               types.String `tfsdk:"object_type_id"`
 	FullyQualifiedName         types.String `tfsdk:"fully_qualified_name"`
@@ -72,6 +75,13 @@ type schemaLabelsModel struct {
 var schemaLabelsAttrTypes = map[string]attr.Type{
 	"singular": types.StringType,
 	"plural":   types.StringType,
+}
+
+var schemaAssociationAttrTypes = map[string]attr.Type{
+	"id":                  types.StringType,
+	"from_object_type_id": types.StringType,
+	"to_object_type_id":   types.StringType,
+	"name":                types.StringType,
 }
 
 type schemaPropertyModel struct {
@@ -96,10 +106,20 @@ type objectSchemaWire struct {
 	Description                string                 `json:"description,omitempty"`
 	Properties                 []schemaPropertyWire   `json:"properties,omitempty"`
 	AssociatedObjects          []string               `json:"associatedObjects,omitempty"`
-	Archived                   bool                   `json:"archived,omitempty"`
+	// Associations is read-only: the association definitions HubSpot lists
+	// on the schema, both directions. Never sent on writes.
+	Associations []schemaAssociationWire `json:"associations,omitempty"`
+	Archived     bool                    `json:"archived,omitempty"`
 	// UpdatedAt is read-only server metadata (RFC3339); never sent on writes.
 	// Reads use it to rank cache generations — see readSchemaConsistent.
 	UpdatedAt string `json:"updatedAt,omitempty"`
+}
+
+type schemaAssociationWire struct {
+	ID               string `json:"id"`
+	FromObjectTypeID string `json:"fromObjectTypeId"`
+	ToObjectTypeID   string `json:"toObjectTypeId"`
+	Name             string `json:"name"`
 }
 
 type objectSchemaLabelsWire struct {
@@ -227,9 +247,36 @@ func (r *objectSchemaResource) Schema(_ context.Context, _ resource.SchemaReques
 			"associated_objects": schema.SetAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
-				MarkdownDescription: "Standard object types (e.g. `CONTACT`, `COMPANY`) to associate with this " +
-					"object at creation. **Create-time only** — not reconciled after creation.",
+				MarkdownDescription: "Object types to associate with this object at creation: standard object " +
+					"names (e.g. `CONTACT`, `COMPANY`) or object type IDs, including another custom object's " +
+					"`object_type_id`. **Create-time only** — not reconciled after creation. Read the resulting " +
+					"association type IDs from `associations`.",
 				PlanModifiers: []planmodifier.Set{keepStateSet{}},
+			},
+			"associations": schema.ListNestedAttribute{
+				Computed:            true,
+				MarkdownDescription: schemaAssociationsDescription,
+				PlanModifiers:       []planmodifier.List{listplanmodifier.UseStateForUnknown()},
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"id": schema.StringAttribute{
+							Computed:            true,
+							MarkdownDescription: schemaAssociationIDDescription,
+						},
+						"from_object_type_id": schema.StringAttribute{
+							Computed:            true,
+							MarkdownDescription: "Object type ID the association points from.",
+						},
+						"to_object_type_id": schema.StringAttribute{
+							Computed:            true,
+							MarkdownDescription: "Object type ID the association points to.",
+						},
+						"name": schema.StringAttribute{
+							Computed:            true,
+							MarkdownDescription: "HubSpot's internal name for the association definition.",
+						},
+					},
+				},
 			},
 			"force_delete": schema.BoolAttribute{
 				Optional: true,
@@ -474,10 +521,14 @@ func (r *objectSchemaResource) readSchemaConsistent(ctx context.Context, state *
 			return objectSchemaWire{}, schemaReadGone, nil
 		}
 		if !imported {
-			if r.schemaReadAgreesWithState(ctx, out, *state) {
+			writtenAgrees := r.schemaReadAgreesWithWrite(ctx, out, *state)
+			if writtenAgrees && schemaAssociationsAgree(out, *state) {
 				return out, schemaReadFresh, nil
 			}
-			if recentWrite {
+			// Associations change through other schemas and the UI, not our
+			// own writes, so a read that differs only there is sampled like
+			// any out-of-band change rather than presumed write lag.
+			if recentWrite && !writtenAgrees {
 				tflog.Info(ctx, "schema read disagrees moments after our own write; keeping state",
 					map[string]any{"path": p})
 				return objectSchemaWire{}, schemaReadChurn, nil
@@ -520,7 +571,19 @@ func sameSchemaSurface(a, b objectSchemaWire) bool {
 		a.Description == b.Description &&
 		sameStringSet(a.SecondaryDisplayProperties, b.SecondaryDisplayProperties) &&
 		sameStringSet(a.RequiredProperties, b.RequiredProperties) &&
-		sameStringSet(a.SearchableProperties, b.SearchableProperties)
+		sameStringSet(a.SearchableProperties, b.SearchableProperties) &&
+		sameAssociationSet(a.Associations, b.Associations)
+}
+
+// sameAssociationSet compares two association lists as unordered sets.
+func sameAssociationSet(a, b []schemaAssociationWire) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	as, bs := slices.Clone(a), slices.Clone(b)
+	slices.SortFunc(as, compareSchemaAssociations)
+	slices.SortFunc(bs, compareSchemaAssociations)
+	return slices.Equal(as, bs)
 }
 
 // sameStringSet compares two string slices as unordered sets.
@@ -534,10 +597,10 @@ func sameStringSet(a, b []string) bool {
 	return slices.Equal(as, bs)
 }
 
-// schemaReadAgreesWithState reports whether flattening api over state leaves
-// the mutable surface unchanged — i.e. the read reflects the state Terraform
-// last wrote, so it is not a stale cache generation.
-func (r *objectSchemaResource) schemaReadAgreesWithState(ctx context.Context, api objectSchemaWire, state objectSchemaResourceModel) bool {
+// schemaReadAgreesWithWrite reports whether flattening api over state leaves
+// the surface the provider writes unchanged — i.e. the read reflects the
+// state Terraform last wrote, so it is not a stale cache generation.
+func (r *objectSchemaResource) schemaReadAgreesWithWrite(ctx context.Context, api objectSchemaWire, state objectSchemaResourceModel) bool {
 	candidate := state
 	if d := flattenSchema(ctx, api, &candidate); d.HasError() {
 		return false
@@ -550,27 +613,39 @@ func (r *objectSchemaResource) schemaReadAgreesWithState(ctx context.Context, ap
 		candidate.Description.Equal(state.Description)
 }
 
+// schemaAssociationsAgree reports whether api lists the associations state
+// holds. A null state value (written before the attribute existed) agrees
+// with anything, so the first refresh after an upgrade takes the read as is.
+func schemaAssociationsAgree(api objectSchemaWire, state objectSchemaResourceModel) bool {
+	if state.Associations.IsNull() {
+		return true
+	}
+	got, d := flattenSchemaAssociations(api.Associations)
+	return !d.HasError() && got.Equal(state.Associations)
+}
+
 // awaitSchemaVisible polls GET until at least one read reflects the schema
 // state just written (HubSpot applies create-time display/required metadata
-// asynchronously). Best-effort: on timeout the caller proceeds with the
-// write echo and readSchemaConsistent absorbs the lag on later refreshes.
-func (r *objectSchemaResource) awaitSchemaVisible(ctx context.Context, written objectSchemaResourceModel) {
+// asynchronously), and returns that read. Best-effort: on timeout it returns
+// false, the caller proceeds with the write echo, and readSchemaConsistent
+// absorbs the lag on later refreshes.
+func (r *objectSchemaResource) awaitSchemaVisible(ctx context.Context, written objectSchemaResourceModel) (objectSchemaWire, bool) {
 	p := "crm/v3/schemas/" + url.PathEscape(written.ObjectTypeID.ValueString())
 	deadline := time.Now().Add(schemaWriteVisibleTimeout)
 	for {
 		var out objectSchemaWire
 		if err := r.client.Get(ctx, p, nil, &out); err == nil &&
-			r.schemaReadAgreesWithState(ctx, out, written) {
-			return
+			r.schemaReadAgreesWithWrite(ctx, out, written) {
+			return out, true
 		}
 		if time.Now().After(deadline) {
 			tflog.Warn(ctx, "schema write not yet visible to reads; proceeding with write echo",
 				map[string]any{"path": p})
-			return
+			return objectSchemaWire{}, false
 		}
 		select {
 		case <-ctx.Done():
-			return
+			return objectSchemaWire{}, false
 		case <-time.After(schemaReadInterval):
 		}
 	}
@@ -597,15 +672,30 @@ func (r *objectSchemaResource) Update(ctx context.Context, req resource.UpdateRe
 		return
 	}
 
+	// The PATCH response is an ObjectTypeDefinition, which has no
+	// associations. Keep the planned value: a PATCH cannot change them.
+	planned := plan.Associations
 	resp.Diagnostics.Append(flattenSchema(ctx, out, &plan)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	plan.Associations = planned
 
 	// PATCHes propagate to reads with the same lag as creates (the new value
 	// was observed live to be absent from every read for 8+ seconds). Wait
 	// for one consistent read so follow-up refreshes and imports see it.
-	r.awaitSchemaVisible(ctx, plan)
+	read, ok := r.awaitSchemaVisible(ctx, plan)
+	if plan.Associations.IsUnknown() {
+		// No prior value to keep (state written before the attribute
+		// existed, refresh skipped). Take the read, or an empty list that the
+		// next refresh corrects.
+		var d diag.Diagnostics
+		if !ok {
+			read = objectSchemaWire{}
+		}
+		plan.Associations, d = flattenSchemaAssociations(read.Associations)
+		resp.Diagnostics.Append(d...)
+	}
 
 	resp.Diagnostics.Append(stampSchemaLastWrite(ctx, resp.Private)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -749,6 +839,8 @@ func flattenSchema(ctx context.Context, api objectSchemaWire, m *objectSchemaRes
 	diags.Append(d...)
 	m.SearchableProperties, d = flattenSearchableProperties(ctx, api, m.SearchableProperties)
 	diags.Append(d...)
+	m.Associations, d = flattenSchemaAssociations(api.Associations)
+	diags.Append(d...)
 
 	if api.Description == "" {
 		m.Description = types.StringNull()
@@ -789,6 +881,51 @@ func flattenSearchableProperties(ctx context.Context, api objectSchemaWire, prio
 	out, d := types.SetValueFrom(ctx, types.StringType, searchable)
 	diags.Append(d...)
 	return out, diags
+}
+
+// Shared with the data source so the two describe associations identically.
+const (
+	schemaAssociationsDescription = "Association definitions HubSpot lists on this schema, in both " +
+		"directions: one entry from this object to each associated type, and one back. Includes " +
+		"associations created with `associated_objects`, by other schemas, or in the HubSpot UI. Sorted " +
+		"by `from_object_type_id`, then `to_object_type_id`, then `id`. Filter on the object type IDs " +
+		"rather than indexing by position."
+	schemaAssociationIDDescription = "Association type ID (portal-specific): the `associationTypeId` used " +
+		"by the Associations API to link records along this direction."
+)
+
+// compareSchemaAssociations orders association definitions by direction,
+// then ID.
+func compareSchemaAssociations(a, b schemaAssociationWire) int {
+	return cmp.Or(
+		cmp.Compare(a.FromObjectTypeID, b.FromObjectTypeID),
+		cmp.Compare(a.ToObjectTypeID, b.ToObjectTypeID),
+		cmp.Compare(a.ID, b.ID),
+	)
+}
+
+// flattenSchemaAssociations converts the schema's association definitions
+// into a list sorted by direction, so cache generations that list them in a
+// different order don't churn state.
+func flattenSchemaAssociations(in []schemaAssociationWire) (types.List, diag.Diagnostics) {
+	sorted := slices.Clone(in)
+	slices.SortFunc(sorted, compareSchemaAssociations)
+	elemType := types.ObjectType{AttrTypes: schemaAssociationAttrTypes}
+	elems := make([]attr.Value, 0, len(sorted))
+	var diags diag.Diagnostics
+	for _, a := range sorted {
+		o, d := types.ObjectValue(schemaAssociationAttrTypes, map[string]attr.Value{
+			"id":                  types.StringValue(a.ID),
+			"from_object_type_id": types.StringValue(a.FromObjectTypeID),
+			"to_object_type_id":   types.StringValue(a.ToObjectTypeID),
+			"name":                types.StringValue(a.Name),
+		})
+		diags.Append(d...)
+		elems = append(elems, o)
+	}
+	l, d := types.ListValue(elemType, elems)
+	diags.Append(d...)
+	return l, diags
 }
 
 func labelsToWire(ctx context.Context, o types.Object) (objectSchemaLabelsWire, diag.Diagnostics) {

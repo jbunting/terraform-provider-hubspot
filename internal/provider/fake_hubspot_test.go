@@ -118,8 +118,18 @@ type fakeObjectSchema struct {
 	SearchableProperties       []string             `json:"searchableProperties"`
 	Description                string               `json:"description,omitempty"`
 	Properties                 []fakeSchemaProperty `json:"properties"`
+	Associations               []fakeSchemaAssoc    `json:"associations"`
 	Archived                   bool                 `json:"archived"`
 	UpdatedAt                  string               `json:"updatedAt"`
+}
+
+// fakeSchemaAssoc is one association definition listed on a schema. Like the
+// live API, a schema lists both directions of each of its associations.
+type fakeSchemaAssoc struct {
+	ID               string `json:"id"`
+	FromObjectTypeID string `json:"fromObjectTypeId"`
+	ToObjectTypeID   string `json:"toObjectTypeId"`
+	Name             string `json:"name"`
 }
 
 // clone deep-copies a schema so a stale snapshot is immune to later writes.
@@ -129,7 +139,17 @@ func (s *fakeObjectSchema) clone() *fakeObjectSchema {
 	c.RequiredProperties = slices.Clone(s.RequiredProperties)
 	c.SearchableProperties = slices.Clone(s.SearchableProperties)
 	c.Properties = slices.Clone(s.Properties)
+	c.Associations = slices.Clone(s.Associations)
 	return &c
+}
+
+// typeDefinition is the schema as PATCH returns it: HubSpot's
+// ObjectTypeDefinition, which carries neither properties nor associations.
+func (s *fakeObjectSchema) typeDefinition() *fakeObjectSchema {
+	c := s.clone()
+	c.Properties = nil
+	c.Associations = nil
+	return c
 }
 
 type fakeSchemaLabels struct {
@@ -234,6 +254,7 @@ type fakeHubSpot struct {
 	pipelineCounter int
 	stageCounter    int
 	schemaCounter   int
+	assocDefCounter int
 	labelCounter    int64
 	listCounter     int
 	flowCounter     int
@@ -631,6 +652,9 @@ func (f *fakeHubSpot) createSchema(w http.ResponseWriter, r *http.Request) {
 		Description:                in.Description,
 		Properties:                 in.Properties,
 	}
+	for _, target := range in.AssociatedObjects {
+		f.defineSchemaAssociation(s, target)
+	}
 	s.normalizeSearchable()
 	f.stampSchemaWrite(s)
 	f.schemas[objectTypeID] = s
@@ -647,6 +671,48 @@ func (f *fakeHubSpot) createSchema(w http.ResponseWriter, r *http.Request) {
 		f.schemaStale[objectTypeID] = &fakeSchemaStale{snapshot: stale, reads: f.schemaReadLag}
 	}
 	writeJSON(w, http.StatusCreated, s)
+}
+
+// fakeStandardObjectTypeIDs maps the standard object names HubSpot accepts in
+// associatedObjects to their fixed object type IDs.
+var fakeStandardObjectTypeIDs = map[string]string{
+	"CONTACT": "0-1",
+	"COMPANY": "0-2",
+	"DEAL":    "0-3",
+	"TICKET":  "0-5",
+}
+
+// defineSchemaAssociation mints the forward and reverse association
+// definitions between s and target (a standard object name, an object type
+// ID, or another custom object). Both directions are listed on s, and on
+// target too when target is a custom object.
+func (f *fakeHubSpot) defineSchemaAssociation(s *fakeObjectSchema, target string) {
+	toID := target
+	if id, ok := fakeStandardObjectTypeIDs[target]; ok {
+		toID = id
+	}
+	other := f.lookupSchema(target)
+	if other != nil {
+		toID = other.ObjectTypeID
+	}
+	f.assocDefCounter++
+	forward := fakeSchemaAssoc{
+		ID:               fmt.Sprintf("%d", 100+f.assocDefCounter),
+		FromObjectTypeID: s.ObjectTypeID,
+		ToObjectTypeID:   toID,
+		Name:             fmt.Sprintf("%s_to_%s", s.Name, toID),
+	}
+	f.assocDefCounter++
+	reverse := fakeSchemaAssoc{
+		ID:               fmt.Sprintf("%d", 100+f.assocDefCounter),
+		FromObjectTypeID: toID,
+		ToObjectTypeID:   s.ObjectTypeID,
+		Name:             fmt.Sprintf("%s_to_%s", toID, s.Name),
+	}
+	s.Associations = append(s.Associations, forward, reverse)
+	if other != nil {
+		other.Associations = append(other.Associations, forward, reverse)
+	}
 }
 
 // stampSchemaWrite advances the schema's updatedAt; the counter keeps stamps
@@ -743,7 +809,7 @@ func (f *fakeHubSpot) schemaByType(w http.ResponseWriter, r *http.Request, ref s
 		}
 		s.normalizeSearchable()
 		f.stampSchemaWrite(s)
-		writeJSON(w, http.StatusOK, s)
+		writeJSON(w, http.StatusOK, s.typeDefinition())
 	case http.MethodDelete:
 		if s == nil {
 			writeHubSpotError(w, http.StatusNotFound, "OBJECT_NOT_FOUND", "schema not found")

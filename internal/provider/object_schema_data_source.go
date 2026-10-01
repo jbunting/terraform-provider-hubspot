@@ -46,6 +46,7 @@ type objectSchemaDataSourceModel struct {
 	RequiredProperties         types.List   `tfsdk:"required_properties"`
 	SearchableProperties       types.List   `tfsdk:"searchable_properties"`
 	Description                types.String `tfsdk:"description"`
+	Associations               types.List   `tfsdk:"associations"`
 }
 
 func (d *objectSchemaDataSource) Metadata(_ context.Context, req datasource.MetadataRequest, resp *datasource.MetadataResponse) {
@@ -111,6 +112,30 @@ func (d *objectSchemaDataSource) Schema(_ context.Context, _ datasource.SchemaRe
 				Computed:            true,
 				MarkdownDescription: "Description of the object schema.",
 			},
+			"associations": schema.ListNestedAttribute{
+				Computed:            true,
+				MarkdownDescription: schemaAssociationsDescription,
+				NestedObject: schema.NestedAttributeObject{
+					Attributes: map[string]schema.Attribute{
+						"id": schema.StringAttribute{
+							Computed:            true,
+							MarkdownDescription: schemaAssociationIDDescription,
+						},
+						"from_object_type_id": schema.StringAttribute{
+							Computed:            true,
+							MarkdownDescription: "Object type ID the association points from.",
+						},
+						"to_object_type_id": schema.StringAttribute{
+							Computed:            true,
+							MarkdownDescription: "Object type ID the association points to.",
+						},
+						"name": schema.StringAttribute{
+							Computed:            true,
+							MarkdownDescription: "HubSpot's internal name for the association definition.",
+						},
+					},
+				},
+			},
 		},
 	}
 }
@@ -151,6 +176,8 @@ func (d *objectSchemaDataSource) Read(ctx context.Context, req datasource.ReadRe
 	resp.Diagnostics.Append(diags...)
 	searchable, diags := stringListValue(ctx, out.SearchableProperties)
 	resp.Diagnostics.Append(diags...)
+	associations, diags := flattenSchemaAssociations(out.Associations)
+	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -168,6 +195,7 @@ func (d *objectSchemaDataSource) Read(ctx context.Context, req datasource.ReadRe
 		RequiredProperties:         required,
 		SearchableProperties:       searchable,
 		Description:                types.StringValue(out.Description),
+		Associations:               associations,
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0 (Unreleased)
+
+ENHANCEMENTS:
+
+* `hubspot_object_schema`: new computed `associations` attribute, on the resource and the data source, listing the schema's association definitions in both directions with their portal-specific association type IDs. `associated_objects` documentation now says custom object type IDs are accepted.
+
 ## 0.2.0 (August 19, 2026)
 
 FEATURES:

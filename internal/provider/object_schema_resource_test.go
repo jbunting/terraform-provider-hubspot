@@ -72,6 +72,21 @@ func TestAccObjectSchema_lifecycle(t *testing.T) {
 						tfjsonpath.New("labels").AtMapKey("singular"), knownvalue.StringExact("Car")),
 					statecheck.ExpectKnownValue("hubspot_object_schema.car",
 						tfjsonpath.New("primary_display_property"), knownvalue.StringExact("model")),
+					statecheck.ExpectKnownValue("hubspot_object_schema.car",
+						tfjsonpath.New("associations"), knownvalue.ListExact([]knownvalue.Check{
+							knownvalue.ObjectExact(map[string]knownvalue.Check{
+								"id":                  knownvalue.StringExact("102"),
+								"from_object_type_id": knownvalue.StringExact("0-1"),
+								"to_object_type_id":   knownvalue.StringExact("2-1"),
+								"name":                knownvalue.StringExact("0-1_to_car"),
+							}),
+							knownvalue.ObjectExact(map[string]knownvalue.Check{
+								"id":                  knownvalue.StringExact("101"),
+								"from_object_type_id": knownvalue.StringExact("2-1"),
+								"to_object_type_id":   knownvalue.StringExact("0-1"),
+								"name":                knownvalue.StringExact("car_to_0-1"),
+							}),
+						})),
 				},
 			},
 			// Identical config must plan empty (no perpetual diff from server
@@ -82,7 +97,8 @@ func TestAccObjectSchema_lifecycle(t *testing.T) {
 					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
 				},
 			},
-			// Update the plural label in place (PATCH, not replace).
+			// Update the plural label in place (PATCH, not replace). The PATCH
+			// echo carries no associations; they must survive the update.
 			{
 				Config: objectSchemaConfig(srv.URL, "Automobiles"),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
@@ -93,6 +109,8 @@ func TestAccObjectSchema_lifecycle(t *testing.T) {
 				ConfigStateChecks: []statecheck.StateCheck{
 					statecheck.ExpectKnownValue("hubspot_object_schema.car",
 						tfjsonpath.New("labels").AtMapKey("plural"), knownvalue.StringExact("Automobiles")),
+					statecheck.ExpectKnownValue("hubspot_object_schema.car",
+						tfjsonpath.New("associations"), knownvalue.ListSizeExact(2)),
 				},
 			},
 			// Import round-trip by objectTypeId. Bootstrap-only fields and
@@ -343,6 +361,83 @@ resource "hubspot_object_schema" "guard" {
 			// Flip force_delete on so the harness's final cleanup destroy
 			// succeeds instead of hitting the guard again.
 			{Config: cfg(true)},
+		},
+	})
+}
+
+// A schema associated with another custom object exposes the association type
+// IDs for both directions, and the other schema picks them up on refresh.
+func TestAccObjectSchema_customAssociation(t *testing.T) {
+	f, srv := newFakeHubSpot(t)
+
+	config := objectSchemaConfig(srv.URL, "Cars") + `
+resource "hubspot_object_schema" "garage" {
+  name                     = "garage"
+  force_delete             = true
+  labels                   = { singular = "Garage", plural = "Garages" }
+  primary_display_property = "address"
+  properties = [
+    { name = "address", label = "Address", type = "string", field_type = "text" },
+  ]
+  associated_objects = [hubspot_object_schema.car.object_type_id]
+}
+
+locals {
+  garage_to_car = one([
+    for a in hubspot_object_schema.garage.associations : a.id
+    if a.to_object_type_id == hubspot_object_schema.car.object_type_id
+  ])
+  car_to_garage = one([
+    for a in hubspot_object_schema.garage.associations : a.id
+    if a.from_object_type_id == hubspot_object_schema.car.object_type_id
+  ])
+}
+
+output "garage_to_car" { value = local.garage_to_car }
+output "car_to_garage" { value = local.car_to_garage }
+`
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownOutputValue("garage_to_car", knownvalue.StringExact("103")),
+					statecheck.ExpectKnownOutputValue("car_to_garage", knownvalue.StringExact("104")),
+					statecheck.ExpectKnownValue("hubspot_object_schema.garage",
+						tfjsonpath.New("associations"), knownvalue.ListSizeExact(2)),
+				},
+			},
+			// The car schema gained the garage definitions out of band (from
+			// its own point of view); refresh records them without a diff.
+			{
+				Config: config,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
+				},
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("hubspot_object_schema.car",
+						tfjsonpath.New("associations"), knownvalue.ListSizeExact(4)),
+				},
+			},
+			// A stale cache generation of the car schema, from before the
+			// garage existed, matches state on every field but associations.
+			// Refresh must not take it.
+			{
+				PreConfig: func() {
+					f.mu.Lock()
+					defer f.mu.Unlock()
+					stale := f.schemas["2-1"].clone()
+					stale.Associations = stale.Associations[:2]
+					f.schemaStale["2-1"] = &fakeSchemaStale{snapshot: stale, reads: 3}
+				},
+				Config: config,
+				ConfigStateChecks: []statecheck.StateCheck{
+					statecheck.ExpectKnownValue("hubspot_object_schema.car",
+						tfjsonpath.New("associations"), knownvalue.ListSizeExact(4)),
+				},
+			},
 		},
 	})
 }

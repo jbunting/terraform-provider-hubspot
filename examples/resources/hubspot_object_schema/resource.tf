@@ -46,3 +46,13 @@ resource "hubspot_property" "color" {
   field_type  = "text"
   group_name  = "carinformation"
 }
+
+# Association type IDs are portal-specific. Look one up by direction from
+# `associations` (here: car -> contact, for linking records via the
+# Associations API).
+output "car_to_contact_association_type_id" {
+  value = one([
+    for a in hubspot_object_schema.car.associations : a.id
+    if a.to_object_type_id == "0-1"
+  ])
+}
